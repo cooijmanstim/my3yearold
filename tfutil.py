@@ -1,15 +1,11 @@
 import numpy as np, tensorflow as tf
 
 FF_NORM_AXIS = 0
-BOUND_WEIGHTS = True
+BOUND_WEIGHTS = False
 
 def maybe_bound_weights(w):
   if BOUND_WEIGHTS:
-    ceil = 0.01
-    maxabsw = tf.reduce_max(tf.abs(w))
-    w = tf.cond(maxabsw < ceil,
-                lambda: w,
-                lambda: tf.where(w == 0, w, w / maxabsw))
+    w = tf.nn.tanh(w)
   return w
 
 def project_terms(xs, depth=None, normalize=True, bias=True, scope=None):
@@ -33,7 +29,7 @@ def project(x, depth, bias=True, scope=None):
   with tf.variable_scope(scope or "project", [x]):
     input_depth = x.get_shape().as_list()[-1]
     w = tf.get_variable("w", shape=[input_depth, depth],
-                        initializer=tf.truncated_normal_initializer(stddev=1))
+                        initializer=tf.uniform_unit_scaling_initializer())
     w = maybe_bound_weights(w)
     y = tf.matmul(x, w)
     if bias:
@@ -58,13 +54,16 @@ def conv_layer(x, radius=None, stride=1, padding="SAME", depth=None, fn=tf.nn.re
   with tf.variable_scope(scope or "conv", []):
     input_depth = x.get_shape().as_list()[-1]
     w = tf.get_variable("w", shape=[radius, radius, input_depth, depth],
-                        initializer=tf.truncated_normal_initializer(stddev=1))
+                        initializer=tf.uniform_unit_scaling_initializer())
     w = maybe_bound_weights(w)
     y = tf.nn.conv2d(x, w, strides=[1, stride, stride, 1], padding=padding)
     if normalize:
       y = batch_normalize(y, axis=[FF_NORM_AXIS, 1, 2])
     else:
       b = tf.get_variable("b", shape=[depth],
-                          initializer=tf.truncated_normal_initializer(stddev=1))
+                          initializer=tf.constant_initializer(0))
       y += b
     return fn(y)
+
+def meanlogabs(x):
+  return tf.reduce_mean(tf.log1p(tf.abs(x)))

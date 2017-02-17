@@ -188,28 +188,36 @@ def process_caption(caption, length):
   return tf.concat([output[:, -1] for output in outputs], axis=1)
 
 def generator(z, context, caption):
-  icl = [0]
-  def cl(x, depth, upsample=False, **conv_layer_kwargs):
-    conv_layer_kwargs.setdefault("scope", "conv%i" % icl[0])
-    conv_layer_kwargs.setdefault("radius", 3)
-    if upsample:
-      x = tf.image.resize_bilinear(x, tf.shape(x)[1:3] * 2)
-    x = tfutil.conv_layer(x, depth=depth, **conv_layer_kwargs)
-    icl[0] += 1
-    return x
+  def residual_block(h, scope=None, **conv_layer_kwargs):
+    with tf.variable_scope(scope or "res"):
+      h_residual = h
+      h = tfutil.conv_layer(h, scope="pre",  fn=lambda x: x, **conv_layer_kwargs)
+      h = tf.nn.relu(h)
+      h = tfutil.conv_layer(h, scope="post", fn=lambda x: x, **conv_layer_kwargs)
+      h = tf.nn.relu(h + h_residual)
+      return h
 
-  zh = toconv(z, depth=64, height=4, width=4, scope="z2h")
-  ch = toconv(caption, depth=64, height=4, width=4, scope="c2h")
-  h = tf.concat([zh, ch], axis=3) # fuse z and caption
-  h = cl(h, depth=128, upsample=True) #  8x8
-  h = cl(h, depth=128, upsample=True) # 16x16
-  h = cl(h, depth=128, upsample=True) # 32x32
-  h = cl(h, depth=128, upsample=True) # 64x64
-  h = tf.concat([h, context], axis=3) # fuse z/caption and context
-  # FIXME residual connections
-  h = cl(h, depth=128)
-  h = cl(h, depth=128)
-  x = cl(h, depth=IMAGE_DEPTH, fn=tf.nn.tanh, scope="h2x", normalize=False)
+  resize = tf.image.resize_bilinear
+
+  h = tf.concat([toconv(z, depth=64, height=4, width=4, scope="z2h"),
+                 toconv(caption, depth=64, height=4, width=4, scope="c2h"),
+                 resize(context, [4, 4])], axis=3)
+
+  for size in [8, 16, 32, 64]:
+    # residual_block can't change depth, need to add intermediate layers to map concatenated
+    # features back to 128
+    h = tfutil.conv_layer(h, depth=128, radius=3, scope="bareuh%i" % size)
+
+    h = residual_block(h, depth=128, radius=3, scope="res%i" % size)
+    h = resize(h, tf.shape(h)[1:3] * 2)
+    h = tf.concat([h, resize(context, [size, size])], axis=3)
+
+  for i in range(3):
+    h = residual_block(h, depth=128 + 3, radius=3, scope="postres%i" % i)
+
+  x = tfutil.conv_layer(h, depth=IMAGE_DEPTH, radius=3, fn=lambda x: x, scope="h2x")
+  # gtor seems to start out saturating the tanh. what to do?
+  x = tf.nn.tanh(x)
   return x
 
 def discriminator(x, caption):
@@ -223,7 +231,7 @@ def discriminator(x, caption):
     icl[0] += 1
     return x
 
-  xh = cl(x, depth=128)
+  xh = x
   xh = cl(xh, depth=128, downsample=True) # 32x32
   xh = cl(xh, depth=128, downsample=True) # 16x16
   xh = cl(xh, depth=128, downsample=True) #  8x8
@@ -231,7 +239,6 @@ def discriminator(x, caption):
   ch = toconv(caption, depth=64, height=4, width=4, scope="c2h")
   h = tf.concat([xh, ch], axis=3)
   h = cl(h, depth=128, downsample=True) #  2x2
-  h = cl(h, depth=128, downsample=True) #  1x1
   h = fromconv(h, depth=1, scope="h2y", normalize=False)
   return h
 
