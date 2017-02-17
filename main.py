@@ -184,7 +184,8 @@ def process_caption(caption, length):
   outputs, states = tf.nn.bidirectional_dynamic_rnn(
     cell_fw, cell_bw, caption, sequence_length=length,
     initial_state_fw=[tf.tile(s[None, :], [tf.shape(caption)[0], 1]) for s in cell_fw.initial_state_parameters],
-    initial_state_bw=[tf.tile(s[None, :], [tf.shape(caption)[0], 1]) for s in cell_bw.initial_state_parameters])
+    initial_state_bw=[tf.tile(s[None, :], [tf.shape(caption)[0], 1]) for s in cell_bw.initial_state_parameters],
+    scope="birnn")
   return tf.concat([output[:, -1] for output in outputs], axis=1)
 
 def generator(z, context, caption):
