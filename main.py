@@ -93,7 +93,7 @@ def main(argv=()):
   caption = tf.placeholder(tf.int32, [None, None], name="caption")
   caption_length = tf.placeholder(tf.int32, [None], name="caption_length")
 
-  global_step = tf.Variable(0, "global_step")
+  global_step = tf.Variable(0, name="global_step", trainable=False)
   variables = construct(image, caption, caption_length, latent, global_step)
   summary_op = tf.summary.merge_all()
 
@@ -132,15 +132,15 @@ def main(argv=()):
 
 
 def construct(image, caption, caption_length, latent, global_step):
-  # TODO wonder about whether real/fake should be based on different examples
-  context = image * context_mask[None, :, :, None]
-
+  # TODO wonder about whether real/fake should be based on different examples,
+  # i.e. should have their own image placeholders
   real = image
 
   with tf.variable_scope("caption"):
     caption_embedding = process_caption(caption, caption_length)
 
   with tf.variable_scope("generator"):
+    context = image * context_mask[None, :, :, None]
     fake = generator(latent, context, caption_embedding)
 
   with tf.variable_scope("discriminator"):
@@ -151,23 +151,23 @@ def construct(image, caption, caption_length, latent, global_step):
   dloss = tf.reduce_mean(fake_score - real_score)
   gloss = tf.reduce_mean(-fake_score)
 
-  caption_parameters = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="caption")
-  dtor_parameters = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="discriminator")
-  gtor_parameters = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="generator")
+  caption_parameters = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="caption")
+  dtor_parameters = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="discriminator")
+  gtor_parameters = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope="generator")
 
-  for parameter in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES):
-    tf.summary.scalar("norm_%s" % parameter.name, tf.norm(parameter))
+  for parameter in tf.trainable_variables():
+    tf.summary.scalar("mla_%s" % parameter.name.replace(":", "_"), tfutil.meanlogabs(parameter))
 
   def make_optimizer(loss, parameters, prefix=""):
     parameters = list(parameters)
     optimizer = tf.train.RMSPropOptimizer(1e-4, centered=True)
     gradients = optimizer.compute_gradients(loss, var_list=parameters)
     for gradient, parameter in gradients:
-      tf.summary.scalar("%s_gradnorm_%s" % (prefix, parameter.name), tf.norm(gradient))
-    return optimizer_apply_gradients(gradients, global_step=global_step)
+      tf.summary.scalar("%sgradmla_%s" % (prefix, parameter.name.replace(":", "_")), tfutil.meanlogabs(gradient))
+    return optimizer.apply_gradients(gradients, global_step=global_step)
 
-  dtor_train_op = make_optimizer(dloss, var_list=dtor_parameters + caption_parameters, "dtor_")
-  gtor_train_op = make_optimizer(gloss, var_list=gtor_parameters + caption_parameters, "gtor_")
+  dtor_train_op = make_optimizer(dloss, dtor_parameters + caption_parameters, prefix="dtor_")
+  gtor_train_op = make_optimizer(gloss, gtor_parameters + caption_parameters, prefix="gtor_")
 
   tf.summary.image("real", real, max_outputs=3)
   tf.summary.image("fake", fake, max_outputs=3)
