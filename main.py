@@ -120,7 +120,7 @@ def main(argv=()):
           dloss, _ = run([variables["dloss"], variables["dtor_train_op"]])
   
         def gstep():
-          gloss, _ = run([variables["gloss"], variables["dtor_train_op"]])
+          gloss, _ = run([variables["gloss"], variables["gtor_train_op"]])
   
         for _ in range(3):
           dstep()
