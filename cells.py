@@ -1,10 +1,7 @@
 import numpy as np, tensorflow as tf
 import tfutil
 
-# wtf
-BasicRNNCell = tf.contrib.rnn.BasicRNNCell
-
-class BaseCell(BasicRNNCell):
+class BaseCell(tf.contrib.rnn.BasicRNNCell):
   @property
   def state_placeholders(self):
     return [tf.placeholder(dtype=tf.float32, shape=[None, size]) for size in self.state_size]
@@ -31,9 +28,8 @@ class BaseCell(BasicRNNCell):
   def get_output(self, state):
     raise NotImplementedError()
 
-# TODO layer norm
 class LSTM(BaseCell):
-  def __init__(self, num_units, forget_bias=1.0, activation=tf.nn.tanh, normalize=False, scope=None):
+  def __init__(self, num_units, forget_bias=5.0, activation=tf.nn.tanh, normalize=False, scope=None):
     self.num_units = num_units
     self.forget_bias = forget_bias
     self.activation = activation
