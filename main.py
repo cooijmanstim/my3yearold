@@ -47,8 +47,8 @@ class Trainer(object):
     self.summaries = H(train=[], valid=[])
 
     for key in "dtor gtor".split():
-      submodel = self.graph.train.model.Get(key)
-      for parameter, gradient in util.equizip(submodel.parameters, submodel.gradients):
+      for parameter, gradient in util.equizip(self.graph.train.model[key].parameters,
+                                              self.graph.train.model[key].gradients):
         self.summaries.train.append(
           tf.summary.scalar("%s_gradmla_%s" %
                             (key, parameter.name.replace(":", "_")),
@@ -72,12 +72,12 @@ class Trainer(object):
   def __call__(self, session, supervisor):
     for _ in range(3):
       for _ in range(3):
-        values = self.graph.train["model.dtor.loss model.dtor.train_op summary_op"].FlatCall(session.run)
+        values = self.graph.train.Narrow("model.dtor.loss model.dtor.train_op summary_op").FlatCall(session.run)
         supervisor.summary_computed(session, values.summary_op)
       for _ in range(3):
-        values = self.graph.train["model.gtor.loss model.gtor.train_op summary_op"].FlatCall(session.run)
+        values = self.graph.train.Narrow("model.gtor.loss model.gtor.train_op summary_op").FlatCall(session.run)
         supervisor.summary_computed(session, values.summary_op)
-    values = self.graph.valid["model.dtor.loss summary_op global_step"].FlatCall(session.run)
+    values = self.graph.valid.Narrow("model.dtor.loss summary_op global_step").FlatCall(session.run)
     supervisor.summary_computed(session, values.summary_op)
     print "%5i %f" % (values.global_step, values.model.dtor.loss)
 
@@ -88,7 +88,7 @@ def make_graph(data, model, config, global_step=None, fold="valid", train=False)
   h.global_step = global_step
   h.model = model(h.inputs)
   for key in "dtor gtor".split():
-    submodel = h.model.Get(key)
+    submodel = h.model[key]
     if train:
       submodel.gradients = tf.gradients(submodel.loss, submodel.parameters)
       submodel.optimizer = tf.train.RMSPropOptimizer(1e-4, centered=True)

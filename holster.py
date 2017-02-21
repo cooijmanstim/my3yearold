@@ -63,7 +63,7 @@ class BaseHolster(object):
       self[key] = value
 
   def __getitem__(self, key):
-    return self.Narrow(key)
+    return self.Get(key)
 
   def __setitem__(self, key, value):
     self.Set(key, value)
@@ -134,6 +134,7 @@ class BaseHolster(object):
 
   def Narrow(self, key):
     return HolsterNarrow(self, key)
+  Y = Narrow
 
   def FlatCall(self, fn, *args, **kwargs):
     return Holster(util.equizip(self.Keys(), fn(list(self.Values()), *args, **kwargs)))
