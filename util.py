@@ -1,4 +1,5 @@
-import numpy as np
+import os
+import numpy as np, tensorflow as tf
 
 def batches(xs, batch_size=1, shuffle=False):
   xs = list(xs)
@@ -33,3 +34,41 @@ def argany(xs):
   for x in xs:
     if x:
       return x
+
+class Factory(object):
+  @classmethod
+  def make(klass, key, *args, **kwargs):
+    for subklass in klass.__subclasses__():
+      if subklass.key == key:
+        return subklass(*args, **kwargs)
+
+def parse_hp(s):
+  d = dict()
+  for a in s.split():
+    key, value = a.split("=")
+    try:
+      value = int(value)
+    except ValueError:
+      try:
+        value = float(value)
+      except ValueError:
+        pass
+    d[key] = value
+  return d
+
+def serialize_hp(hp, outer_separator=" ", inner_separator="="):
+  return outer_separator.join(sorted(["%s%s%s" % (k, inner_separator, v) for k, v in hp.Items()]))
+
+def make_label(config):
+  return "%s%s%s" % (config.basename,
+                     "_" if config.basename else "",
+                     serialize_hp(config.hp, outer_separator="_"))
+
+def prepare_run_directory(config):
+  if not config.resume:
+    if tf.gfile.Exists(config.output_dir):
+      tf.gfile.DeleteRecursively(config.output_dir)
+  if not tf.gfile.Exists(config.output_dir):
+    tf.gfile.MakeDirs(config.output_dir)
+  with open(os.path.join(config.output_dir, "hp.conf"), "w") as f:
+    f.write(serialize_hp(config.hp, outer_separator="\n"))

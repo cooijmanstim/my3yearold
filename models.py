@@ -2,9 +2,15 @@ import numpy as np, tensorflow as tf
 import util, tfutil, cells
 from holster import H
 
-class SillyGenerator(object):
-  def __init__(self, config):
-    self.config = config
+class Rtor(util.Factory): pass
+class Gtor(util.Factory): pass
+class Dtor(util.Factory): pass
+
+class SillyGtor(Gtor):
+  key = "silly"
+
+  def __init__(self, hp):
+    self.hp = hp
 
   def __call__(self, latent, context, caption):
     def residual_block(h, scope=None, **conv_layer_kwargs):
@@ -39,9 +45,11 @@ class SillyGenerator(object):
   
     return H(output=x)
 
-class SillyDiscriminator(object):
-  def __init__(self, config):
-    self.config = config
+class SillyDtor(Dtor):
+  key = "silly"
+
+  def __init__(self, hp):
+    self.hp = hp
 
   def __call__(self, image, caption):
     icl = [0]
@@ -65,17 +73,19 @@ class SillyDiscriminator(object):
     y = tfutil.fromconv(h, depth=1, scope="h2y", normalize=False)
     return H(output=y)
 
-class BidirectionalReader(object):
-  def __init__(self, config):
-    self.config = config
+class BidirRtor(Rtor):
+  key = "bidir"
+
+  def __init__(self, hp):
+    self.hp = hp
 
   def __call__(self, caption, caption_length):
+    hp = self.hp
     h = H()
-    h.caption = tf.one_hot(caption, self.config.alphabet_size)
+    h.caption = tf.one_hot(caption, hp.data_dim)
     h.length = caption_length
-    # FIXME: LSTM is not lipschitz or is it
-    h.cell_fw = cells.LSTM(num_units=200, normalize=True, scope="fw")
-    h.cell_bw = cells.LSTM(num_units=200, normalize=True, scope="bw")
+    h.cell_fw = cells.make(hp.cell.kind, num_units=hp.cell.size, normalize=hp.cell.normalize, scope="fw")
+    h.cell_bw = cells.make(hp.cell.kind, num_units=hp.cell.size, normalize=hp.cell.normalize, scope="bw")
     h.outputs, h.states = tf.nn.bidirectional_dynamic_rnn(
       h.cell_fw, h.cell_bw, h.caption, sequence_length=h.length,
       initial_state_fw=[tf.tile(s[None, :], [tf.shape(h.caption)[0], 1]) for s in h.cell_fw.initial_state_parameters],
@@ -85,20 +95,20 @@ class BidirectionalReader(object):
     return h
 
 class Model(object):
-  def __init__(self, config):
-    self.config = config
-    self.reader = BidirectionalReader(config)
-    self.gtor = SillyGenerator(config)
-    self.dtor = SillyDiscriminator(config)
+  def __init__(self, hp):
+    self.hp = hp
+    self.rtor = Rtor.make(hp.rtor.kind, hp.rtor)
+    self.gtor = Gtor.make(hp.gtor.kind, hp.rtor)
+    self.dtor = Dtor.make(hp.dtor.kind, hp.rtor)
 
   def __call__(self, inputs):
     # TODO wonder about whether real/fake should be based on different examples,
     # i.e. should have their own image placeholders
     h = H()
 
-    with tf.variable_scope("reader") as scope:
-      h.reader = self.reader(inputs.caption, inputs.caption_length)
-      h.reader.parameters = tfutil.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope)
+    with tf.variable_scope("rtor") as scope:
+      h.rtor = self.rtor(inputs.caption, inputs.caption_length)
+      h.rtor.parameters = tfutil.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope)
 
     with tf.variable_scope("gtor") as scope:
       # FIXME mscoco assumption
@@ -106,23 +116,22 @@ class Model(object):
       h.context_mask[16:48, 16:48] = 0
   
       h.context = inputs.image * h.context_mask[None, :, :, None]
-      h.gtor = self.gtor(inputs.latent, h.context, h.reader.output)
+      h.gtor = self.gtor(inputs.latent, h.context, h.rtor.output)
       h.gtor.parameters = tfutil.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope)
 
     h.real = inputs.image
     h.fake = h.gtor.output
 
     with tf.variable_scope("dtor") as scope:
-      h.dtor.real = self.dtor(h.real, h.reader.output)
+      h.dtor.real = self.dtor(h.real, h.rtor.output)
       h.dtor.parameters = tfutil.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope)
     with tf.variable_scope("dtor", reuse=True):
-      h.dtor.fake = self.dtor(h.fake, h.reader.output)
+      h.dtor.fake = self.dtor(h.fake, h.rtor.output)
 
     h.dtor.loss = tf.reduce_mean( h.dtor.fake.output - h.dtor.real.output)
     h.gtor.loss = tf.reduce_mean(-h.dtor.fake.output)
 
-    h.gtor.parameters += h.reader.parameters
-    h.dtor.parameters += h.reader.parameters
+    h.gtor.parameters += h.rtor.parameters
+    h.dtor.parameters += h.rtor.parameters
     assert h.gtor.parameters
-
     return h

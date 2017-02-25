@@ -1,7 +1,10 @@
 import numpy as np, tensorflow as tf
-import tfutil
+import tfutil, util
 
-class BaseCell(tf.contrib.rnn.BasicRNNCell):
+def make(key, *args, **kwargs):
+  return BaseCell.make(key, *args, **kwargs)
+
+class BaseCell(tf.contrib.rnn.BasicRNNCell, util.Factory):
   @property
   def state_placeholders(self):
     return [tf.placeholder(dtype=tf.float32, shape=[None, size]) for size in self.state_size]
@@ -29,6 +32,8 @@ class BaseCell(tf.contrib.rnn.BasicRNNCell):
     raise NotImplementedError()
 
 class LSTM(BaseCell):
+  key = "lstm"
+
   def __init__(self, num_units, forget_bias=5.0, activation=tf.nn.tanh, normalize=False, scope=None):
     self.num_units = num_units
     self.forget_bias = forget_bias

@@ -1,31 +1,37 @@
+import os
 import numpy as np, tensorflow as tf
 import util, tfutil, datasets, models
 from holster import H
 
 FLAGS = tf.flags.FLAGS
-tf.flags.DEFINE_integer("batch_size", "100", "batch size")
+tf.flags.DEFINE_string("base_output_dir", "/Tmp/cooijmat/gan", "root directory under which runs will be stored")
+tf.flags.DEFINE_string("basename", "", "base name for run")
+tf.flags.DEFINE_string("hp", "", "hyperparameter string")
 tf.flags.DEFINE_bool("resume", False, "resume training from previous checkpoint")
 
 def main(argv=()):
   assert not argv[1:]
 
-  output_dir = "/Tmp/cooijmat/gan/debug"
-  if not FLAGS.resume:
-    if tf.gfile.Exists(output_dir):
-      tf.gfile.DeleteRecursively(output_dir)
-  if not tf.gfile.Exists(output_dir):
-    tf.gfile.MakeDirs(output_dir)
+  config = H(data_dir="/Tmp/cooijmat/mscoco",
+             base_output_dir=FLAGS.base_output_dir,
+             basename=FLAGS.basename,
+             resume=FLAGS.resume)
+  config.hp = H(util.parse_hp(FLAGS.hp))
+  print str(config.hp)
+  config.label = util.make_label(config)
+  config.output_dir = os.path.join(config.base_output_dir, config.label)
 
-  config = H(latent_dim=128,
-             batch_size=FLAGS.batch_size,
-             data_dir="/Tmp/cooijmat/mscoco")
   data = datasets.MscocoTF(config)
   config.alphabet_size = len(data.alphabet)
+  config.hp.rtor.data_dim = config.alphabet_size
 
-  model = models.Model(config)
+  # NOTE: all hyperparameters must be set at this point
+  util.prepare_run_directory(config)
+
+  model = models.Model(config.hp)
   trainer = Trainer(data, model, config)
 
-  supervisor = tf.train.Supervisor(logdir=output_dir, summary_op=None)
+  supervisor = tf.train.Supervisor(logdir=config.output_dir, summary_op=None)
   with supervisor.managed_session() as session:
     while not supervisor.should_stop():
       trainer(session, supervisor)
@@ -83,8 +89,8 @@ class Trainer(object):
 
 def make_graph(data, model, config, global_step=None, fold="valid", train=False):
   h = H()
-  h.inputs = data.get_variables([data.get_tfrecord_path(fold)], config.batch_size)
-  h.inputs.latent = tf.truncated_normal([tf.shape(h.inputs.image)[0], config.latent_dim])
+  h.inputs = data.get_variables([data.get_tfrecord_path(fold)], config.hp.batch_size)
+  h.inputs.latent = tf.truncated_normal([tf.shape(h.inputs.image)[0], config.hp.latent_dim])
   h.global_step = global_step
   h.model = model(h.inputs)
   for key in "dtor gtor".split():

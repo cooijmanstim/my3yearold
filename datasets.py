@@ -14,14 +14,16 @@ class Mscoco(object):
 class MscocoTF(Mscoco):
   def __init__(self, config):
     self.config = config
+    self.tfrecord_dir = os.path.join(self.config.data_dir, "tfrecord")
     self.ensure_local_copy()
-    self.alphabet = pkl.load(open(os.path.join(self.config.data_dir, "tfrecord", "alphabet.pkl")))
+    self.alphabet = pkl.load(open(os.path.join(self.tfrecord_dir, "alphabet.pkl")))
     print "TF alphabet md5sum %s" % hashlib.md5("".join(self.alphabet.keys())).hexdigest()
 
   def ensure_local_copy(self):
-    if not tf.gfile.Exists(self.config.data_dir):
+    if not tf.gfile.Exists(self.tfrecord_dir):
       print "copying data to", self.config.data_dir
-      shutil.copytree(os.environ["MSCOCO_TFRECORD_DIR"], self.config.data_dir)
+      tf.gfile.MakeDirs(self.config.data_dir)
+      shutil.copytree(os.environ["MSCOCO_TFRECORD_DIR"], self.tfrecord_dir)
       print "done"
 
   def get_tfrecord_path(self, fold):
@@ -125,7 +127,7 @@ class MscocoNP(Mscoco):
   
     caption_strings = self.captions[identifier]
     np.random.shuffle(caption_strings)
-    caption_string = " ".join(caption_strings)
+    caption_string = "|".join(caption_strings)
     caption = np.array([self.alphabet[c] for c in caption_string], dtype=int)
   
     image = np.array(Image.fromarray(np.array(Image.open(filename))), dtype=np.float32)
