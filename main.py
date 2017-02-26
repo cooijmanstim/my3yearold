@@ -68,6 +68,7 @@ class Trainer(object):
     self.summaries.valid.extend([
       tf.summary.image("real", self.graph.valid.model.real, max_outputs=3),
       tf.summary.image("fake", self.graph.valid.model.fake, max_outputs=3),
+      tf.summary.image("fakeraw", self.graph.valid.model.fakeraw, max_outputs=3),
       tf.summary.scalar("dtor.loss", self.graph.valid.model.dtor.loss),
       tf.summary.scalar("gtor.loss", self.graph.valid.model.gtor.loss)
     ])

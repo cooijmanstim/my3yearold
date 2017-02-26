@@ -12,37 +12,19 @@ class SillyGtor(Gtor):
   def __init__(self, hp):
     self.hp = hp
 
-  def __call__(self, latent, context, caption):
-    def residual_block(h, scope=None, **conv_layer_kwargs):
-      with tf.variable_scope(scope or "res"):
-        h_residual = h
-        h = tfutil.conv_layer(h, scope="pre",  fn=lambda x: x, **conv_layer_kwargs)
-        h = tf.nn.relu(h)
-        h = tfutil.conv_layer(h, scope="post", fn=lambda x: x, **conv_layer_kwargs)
-        h = tf.nn.relu(h + h_residual)
-        return h
-  
-    resize = tf.image.resize_bilinear
-  
-    h = tf.concat([tfutil.toconv(latent, depth=64, height=4, width=4, scope="z2h"),
-                   tfutil.toconv(caption, depth=64, height=4, width=4, scope="c2h"),
-                   resize(context, [4, 4])], axis=3)
-  
-    for size in [8, 16, 32, 64]:
-      # residual_block can't change depth, need to add intermediate layers to map concatenated
-      # features back to 128
-      h = tfutil.conv_layer(h, depth=128, radius=3, scope="bareuh%i" % size)
-  
-      h = residual_block(h, depth=128, radius=3, scope="res%i" % size)
-      h = resize(h, tf.shape(h)[1:3] * 2)
-      h = tf.concat([h, resize(context, [size, size])], axis=3)
-  
-    for i in range(3):
-      h = residual_block(h, depth=128 + 3, radius=3, scope="postres%i" % i)
-  
-    x = tfutil.conv_layer(h, depth=context.shape[3], radius=3, fn=lambda x: x, scope="h2x")
-    x = tf.nn.tanh(x)
-  
+  def __call__(self, context, caption, latent):
+    condition = tfutil.layer([caption, latent], depth=256, scope="condition")
+    condition = tfutil.toconv(condition, depth=64, height=4, width=4, scope="c2h")
+    with tf.variable_scope("red"):
+      context_by_size = reduce_image(context, contexts=[condition], downto=2)
+    h = context_by_size[2]
+    for size in [4, 8, 16, 32, 64]:
+      h = tfutil.residual_block(h, depth=128, radius=3, scope="res%i" % size)
+      h = tf.image.resize_bilinear(h, tf.shape(h)[1:3] * 2)
+      h = tf.concat([h, context_by_size[size]], axis=3)
+    for i in range(2):
+      h = tfutil.residual_block(h, depth=128, radius=3, scope="postres%i" % i)
+    x = tfutil.conv_layer(h, depth=context.shape[3], radius=3, fn=tf.nn.tanh, scope="h2x")
     return H(output=x)
 
 class SillyDtor(Dtor):
@@ -52,26 +34,38 @@ class SillyDtor(Dtor):
     self.hp = hp
 
   def __call__(self, image, caption):
-    icl = [0]
-    def cl(x, depth, downsample=False, **conv_layer_kwargs):
-      conv_layer_kwargs.setdefault("scope", "conv%i" % icl[0])
-      conv_layer_kwargs.setdefault("radius", 3)
-      x = tfutil.conv_layer(x, depth=depth, **conv_layer_kwargs)
-      if downsample:
-        x = tf.nn.max_pool(x, [1, 2, 2, 1], strides=[1, 2, 2, 1], padding="VALID")
-      icl[0] += 1
-      return x
-  
-    xh = image
-    xh = cl(xh, depth=128, downsample=True) # 32x32
-    xh = cl(xh, depth=128, downsample=True) # 16x16
-    xh = cl(xh, depth=128, downsample=True) #  8x8
-    xh = cl(xh, depth=128, downsample=True) #  4x4
-    ch = tfutil.toconv(caption, depth=64, height=4, width=4, scope="c2h")
-    h = tf.concat([xh, ch], axis=3)
-    h = cl(h, depth=128, downsample=True) #  2x2
-    y = tfutil.fromconv(h, depth=1, scope="h2y", normalize=False)
+    caption = tfutil.toconv(caption, depth=64, height=4, width=4, scope="c2h")
+    with tf.variable_scope("red"):
+      h = reduce_image(image, contexts=[caption], downto=2)[2]
+    h = tfutil.fromconv(h, depth=128)
+    y = tfutil.layer([h], depth=1, scope="h2y", normalize=False)
     return H(output=y)
+
+def reduce_image(image, contexts=[], downto=1, depth=128):
+  icl = [0]
+  def cl(x, depth, downsample=False, **conv_layer_kwargs):
+    conv_layer_kwargs.setdefault("scope", "conv%i" % icl[0])
+    conv_layer_kwargs.setdefault("radius", 3)
+    x = tfutil.conv_layer(x, depth=depth, **conv_layer_kwargs)
+    if downsample:
+      x = tf.nn.max_pool(x, [1, 2, 2, 1], strides=[1, 2, 2, 1], padding="VALID")
+    icl[0] += 1
+    return x
+
+  reductions = dict()
+  size = 64
+  reductions[size] = image
+  while size > downto:
+    reduction = reductions[size]
+    reduction = cl(reduction, depth=depth, downsample=True)
+    size //= 2
+    # integrate caption/latent when they fit
+    reduction = tf.concat([reduction] +
+                          [context for context in contexts
+                           if context.shape[1] == size and context.shape[2] == size],
+                          axis=3)
+    reductions[size] = reduction
+  return reductions
 
 class BidirRtor(Rtor):
   key = "bidir"
@@ -112,15 +106,17 @@ class Model(object):
 
     with tf.variable_scope("gtor") as scope:
       # FIXME mscoco assumption
-      h.context_mask = np.ones((64, 64), dtype=float)
-      h.context_mask[16:48, 16:48] = 0
+      h.context_mask = np.ones((1, 64, 64, 1), dtype=float)
+      h.context_mask[:, 16:48, 16:48, :] = 0
   
-      h.context = inputs.image * h.context_mask[None, :, :, None]
-      h.gtor = self.gtor(inputs.latent, h.context, h.rtor.output)
+      h.context = inputs.image * h.context_mask
+      h.gtor = self.gtor(h.context, h.rtor.output, inputs.latent)
       h.gtor.parameters = tfutil.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope)
 
     h.real = inputs.image
-    h.fake = h.gtor.output
+
+    h.fakeraw = h.gtor.output
+    h.fake = h.context_mask * h.real + (1 - h.context_mask) * h.fakeraw
 
     with tf.variable_scope("dtor") as scope:
       h.dtor.real = self.dtor(h.real, h.rtor.output)

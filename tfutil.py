@@ -23,6 +23,19 @@ def maybe_bound_weights(w):
     w = tf.nn.tanh(w)
   return w
 
+def layers(xs, sizes, scope=None, **layer_kwargs):
+  xs = list(xs)
+  with tf.variable_scope(scope or "layers", values=xs):
+    for i, size in enumerate(sizes):
+      with tf.variable_scope(str(i), values=xs):
+        xs = [layer(xs, output_dim=size, **layer_kwargs)]
+    return xs[0]
+
+def layer(xs, fn=tf.nn.relu, normalize=True, bias=True, **project_terms_kwargs):
+  project_terms_kwargs.setdefault("normalize", normalize)
+  project_terms_kwargs.setdefault("bias", bias)
+  return fn(project_terms(xs, **project_terms_kwargs))
+
 def project_terms(xs, depth=None, normalize=True, bias=True, scope=None):
   xs = list(xs)
   with tf.variable_scope(scope or "project_terms", values=xs):
@@ -83,6 +96,23 @@ def conv_layer(x, radius=None, stride=1, padding="SAME", depth=None, fn=tf.nn.re
                           initializer=tf.constant_initializer(0))
       y += b
     return fn(y)
+
+def residual_block(h, scope=None, depth=None, fn=tf.nn.relu, **conv_layer_kwargs):
+  input_depth = h.shape[-1]
+  if not depth:
+    depth = input_depth
+  conv_layer_kwargs["depth"] = depth
+  conv_layer_kwargs["fn"] = lambda x: x
+  with tf.variable_scope(scope or "res"):
+    if depth == input_depth:
+      h_thru = h
+    else:
+      h_thru = conv_layer(h, scope="thru", bias=False, **conv_layer_kwargs)
+    h = conv_layer(h, scope="pre",  **conv_layer_kwargs)
+    h = fn(h)
+    h = conv_layer(h, scope="post", **conv_layer_kwargs)
+    h = fn(h + h_thru)
+    return h
 
 def toconv(x, depth, height, width, **project_terms_kwargs):
   return tf.reshape(project_terms([x], depth=depth * height * width,
