@@ -23,13 +23,8 @@ def maybe_bound_weights(w):
     w = tf.nn.tanh(w)
   return w
 
-def layers(xs, sizes, scope=None, **layer_kwargs):
-  xs = list(xs)
-  with tf.variable_scope(scope or "layers", values=xs):
-    for i, size in enumerate(sizes):
-      with tf.variable_scope(str(i), values=xs):
-        xs = [layer(xs, output_dim=size, **layer_kwargs)]
-    return xs[0]
+def get_depth(x):
+  return x.get_shape().as_list()[-1]
 
 def layer(xs, fn=tf.nn.relu, normalize=True, bias=True, **project_terms_kwargs):
   project_terms_kwargs.setdefault("normalize", normalize)
@@ -66,25 +61,19 @@ def project(x, depth, bias=True, scope=None):
 
 def batch_normalize(x, beta=None, gamma=None, epsilon=1e-5, scope=None, axis=FF_NORM_AXIS):
   with tf.variable_scope(scope or "norm", [x, beta, gamma]):
-    depth = x.get_shape().as_list()[-1]
+    axis = [axis] if isinstance(axis, numbers.Integral) else axis
+    mean, variance = tf.nn.moments(x, axes=axis)
     if gamma is None:
-      gamma = tf.get_variable("gamma", shape=depth, initializer=tf.constant_initializer(0.1))
+      gamma = tf.get_variable("gamma", shape=mean.shape, initializer=tf.constant_initializer(0.1))
       gamma = maybe_bound_weights(gamma)
     if beta is None:
-      beta = tf.get_variable("beta", shape=depth, initializer=tf.constant_initializer(0))
-    if False:
-      # tf.nn.moments doesn't deal well with dynamic shapes
-      mean = tf.reduce_mean(x, axis=axis, keep_dims=True)
-      variance = tf.reduce_mean((x - mean)**2, axis=axis, keep_dims=True)
-      return beta + gamma / tf.sqrt(variance + epsilon) * (x - mean)
-    else:
-      axis = [axis] if isinstance(axis, numbers.Integral) else axis
-      mean, variance = tf.nn.moments(x, axes=axis)
-      return tf.nn.batch_normalization(x, mean, variance, beta, gamma, variance_epsilon=epsilon)
+      beta = tf.get_variable("beta", shape=mean.shape, initializer=tf.constant_initializer(0))
+    return tf.nn.batch_normalization(x, mean, variance, beta, gamma, variance_epsilon=epsilon)
 
 def conv_layer(x, radius=None, stride=1, padding="SAME", depth=None, fn=tf.nn.relu, normalize=True, bias=True, separable=True, scope=None):
   with tf.variable_scope(scope or "conv", []):
-    input_depth = x.get_shape().as_list()[-1]
+    input_depth = get_depth(x)
+
     if separable:
       multiplier = max(1, depth // input_depth)
       dw = tf.get_variable("dw", shape=[radius, radius, input_depth, multiplier],
@@ -112,7 +101,7 @@ def conv_layer(x, radius=None, stride=1, padding="SAME", depth=None, fn=tf.nn.re
     return fn(y)
 
 def residual_block(h, scope=None, depth=None, fn=tf.nn.relu, **conv_layer_kwargs):
-  input_depth = h.shape[-1]
+  input_depth = get_depth(h)
   if not depth:
     depth = input_depth
   conv_layer_kwargs["depth"] = depth
