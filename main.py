@@ -23,7 +23,7 @@ def main(argv=()):
 
   data = datasets.MscocoTF(config)
   config.alphabet_size = len(data.alphabet)
-  config.hp.rtor.data_dim = config.alphabet_size
+  config.hp.data_dim = config.alphabet_size
 
   # NOTE: all hyperparameters must be set at this point
   util.prepare_run_directory(config)

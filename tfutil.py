@@ -82,17 +82,21 @@ def batch_normalize(x, beta=None, gamma=None, epsilon=1e-5, scope=None, axis=FF_
       mean, variance = tf.nn.moments(x, axes=axis)
       return tf.nn.batch_normalization(x, mean, variance, beta, gamma, variance_epsilon=epsilon)
 
-def conv_layer(x, radius=None, stride=1, padding="SAME", depth=None, fn=tf.nn.relu, normalize=True, bias=True, separable=True, separable_multiplier=3, scope=None):
+def conv_layer(x, radius=None, stride=1, padding="SAME", depth=None, fn=tf.nn.relu, normalize=True, bias=True, separable=True, scope=None):
   with tf.variable_scope(scope or "conv", []):
     input_depth = x.get_shape().as_list()[-1]
     if separable:
-      dw = tf.get_variable("dw", shape=[radius, radius, input_depth, separable_multiplier],
+      multiplier = max(1, depth // input_depth)
+      dw = tf.get_variable("dw", shape=[radius, radius, input_depth, multiplier],
                            initializer=tf.uniform_unit_scaling_initializer())
-      pw = tf.get_variable("pw", shape=[1, 1, separable_multiplier * input_depth, depth],
+      pw = tf.get_variable("pw", shape=[1, 1, multiplier * input_depth, depth],
                            initializer=tf.uniform_unit_scaling_initializer())
       dw = maybe_bound_weights(dw)
       pw = maybe_bound_weights(pw)
-      y = tf.nn.separable_conv2d(x, dw, pw, strides=[1, stride, stride, 1], padding=padding)
+      # This does just what tf.nn.separable_conv2d would do but isn't impractically anal about
+      # input_depth * multiplier > depth. In particular, it allows input_depth > depth.
+      z = tf.nn.depthwise_conv2d(x, dw, strides=[1, stride, stride, 1], padding=padding)
+      y = tf.nn.conv2d(z, pw, strides=[1, 1, 1, 1], padding="VALID")
     else:
       w = tf.get_variable("w", shape=[radius, radius, input_depth, depth],
                           initializer=tf.uniform_unit_scaling_initializer())

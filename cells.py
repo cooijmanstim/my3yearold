@@ -94,14 +94,16 @@ class QRNN(BaseCell):
   def transition(self, inputs, state, scope=None):
     with tf.variable_scope(scope or self.scope):
       c, h = state
+      input, = inputs
       if self.normalize:
-        inputs = tfutil.batch_normalize(inputs, scope="jfo")
-      f, o, j = tf.split(inputs, 3, axis=2)
+        input = tfutil.batch_normalize(input, scope="jfo")
+      f, o, j = tf.split(input, 3, axis=1)
       f += self.forget_bias
       new_c = tf.nn.sigmoid(f) * c + (1 - tf.nn.sigmoid(f)) * self.activation(j)
       output_c = new_c
       if self.normalize:
         output_c = tfutil.batch_normalize(output_c, scope="c")
       new_h = tf.nn.sigmoid(o) * self.activation(output_c)
+      new_h += 0 * h # to avoid None gradient on initial state
       new_c = output_c
     return [new_c, new_h]

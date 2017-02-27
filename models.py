@@ -67,7 +67,7 @@ class RecurrentRtor(Rtor):
       batch_size = tf.shape(x)[0]
       h.output, h.state = tf.nn.dynamic_rnn(
         h.cell, x, sequence_length=length,
-        initial_state=[tf.tile(s[None, :], [batch_size, 1]) for s in h.cell.initial_state_parameters])
+        initial_state=[tf.tile(s[None, :], [batch_size, 1]) for s in h.cell.initial_state_parameters],
         scope="rnn")
       h.summary = h.output[:, -1]
     h.output_length = length
@@ -84,7 +84,7 @@ class ConvRtor(Rtor):
     h = H()
     h.input = x
     h.input_length = length
-    w = tf.get_variable("w", shape=[hp.radius, tf.shape(h.input)[-1], hp.size],
+    w = tf.get_variable("w", shape=[hp.radius, h.input.shape[-1], hp.size],
                         initializer=tf.uniform_unit_scaling_initializer())
     w = tfutil.maybe_bound_weights(w)
     h.output = tf.nn.conv1d(h.input, w, stride=1, padding="VALID")
@@ -134,7 +134,7 @@ class Model(object):
     h = H()
 
     with tf.variable_scope("rtor") as scope:
-      h.rtor = self.rtor(tf.one_hot(inputs.caption, hp.data_dim),
+      h.rtor = self.rtor(tf.one_hot(inputs.caption, self.hp.data_dim),
                          length=inputs.caption_length)
       h.rtor.parameters = tfutil.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope)
 
@@ -172,7 +172,7 @@ def reduce_image(image, contexts=[], downto=1, depth=128):
   reductions[size] = image
   while size > downto:
     reduction = reductions[size]
-    reduction = tfutil.conv_layer(reduction, radius=3, depth=depth, downsample=True, scope="conv%i" % size)
+    reduction = tfutil.conv_layer(reduction, radius=3, depth=depth, scope="conv%i" % size)
     reduction = tf.nn.max_pool(reduction, [1, 2, 2, 1], strides=[1, 2, 2, 1], padding="VALID")
     size //= 2
     # integrate caption/latent when they fit

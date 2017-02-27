@@ -35,12 +35,20 @@ def argany(xs):
     if x:
       return x
 
+def deepsubclasses(klass):
+  for subklass in klass.__subclasses__():
+    yield subklass
+    for subsubklass in deepsubclasses(subklass):
+      yield subsubklass
+
 class Factory(object):
   @classmethod
   def make(klass, key, *args, **kwargs):
-    for subklass in klass.__subclasses__():
+    for subklass in deepsubclasses(klass):
       if subklass.key == key:
         return subklass(*args, **kwargs)
+    else:
+      raise KeyError("unknown %s subclass key %s" % (klass, key))
 
 def parse_hp(s):
   d = dict()
