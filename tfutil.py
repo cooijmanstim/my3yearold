@@ -82,13 +82,23 @@ def batch_normalize(x, beta=None, gamma=None, epsilon=1e-5, scope=None, axis=FF_
       mean, variance = tf.nn.moments(x, axes=axis)
       return tf.nn.batch_normalization(x, mean, variance, beta, gamma, variance_epsilon=epsilon)
 
-def conv_layer(x, radius=None, stride=1, padding="SAME", depth=None, fn=tf.nn.relu, normalize=True, bias=True, scope=None):
+def conv_layer(x, radius=None, stride=1, padding="SAME", depth=None, fn=tf.nn.relu, normalize=True, bias=True, separable=True, separable_multiplier=3, scope=None):
   with tf.variable_scope(scope or "conv", []):
     input_depth = x.get_shape().as_list()[-1]
-    w = tf.get_variable("w", shape=[radius, radius, input_depth, depth],
-                        initializer=tf.uniform_unit_scaling_initializer())
-    w = maybe_bound_weights(w)
-    y = tf.nn.conv2d(x, w, strides=[1, stride, stride, 1], padding=padding)
+    if separable:
+      dw = tf.get_variable("dw", shape=[radius, radius, input_depth, separable_multiplier],
+                           initializer=tf.uniform_unit_scaling_initializer())
+      pw = tf.get_variable("pw", shape=[1, 1, separable_multiplier * input_depth, depth],
+                           initializer=tf.uniform_unit_scaling_initializer())
+      dw = maybe_bound_weights(dw)
+      pw = maybe_bound_weights(pw)
+      y = tf.nn.separable_conv2d(x, dw, pw, strides=[1, stride, stride, 1], padding=padding)
+    else:
+      w = tf.get_variable("w", shape=[radius, radius, input_depth, depth],
+                          initializer=tf.uniform_unit_scaling_initializer())
+      w = maybe_bound_weights(w)
+      y = tf.nn.conv2d(x, w, strides=[1, stride, stride, 1], padding=padding)
+
     if normalize:
       y = batch_normalize(y, axis=[FF_NORM_AXIS, 1, 2])
     else:
