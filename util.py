@@ -1,4 +1,4 @@
-import os
+import os, sys, shutil
 import numpy as np, tensorflow as tf
 
 def batches(xs, batch_size=1, shuffle=False):
@@ -78,5 +78,8 @@ def prepare_run_directory(config):
       tf.gfile.DeleteRecursively(config.output_dir)
   if not tf.gfile.Exists(config.output_dir):
     tf.gfile.MakeDirs(config.output_dir)
-  with open(os.path.join(config.output_dir, "hp.conf"), "w") as f:
-    f.write(serialize_hp(config.hp, outer_separator="\n"))
+  if not config.resume:
+    with open(os.path.join(config.output_dir, "hp.conf"), "w") as f:
+      f.write(serialize_hp(config.hp, outer_separator="\n"))
+    shutil.copytree(os.path.dirname(os.path.realpath(__file__)),
+                    os.path.join(config.output_dir, "code"))
