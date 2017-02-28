@@ -75,16 +75,20 @@ def conv_layer(x, radius=None, stride=1, padding="SAME", depth=None, fn=tf.nn.re
     input_depth = get_depth(x)
 
     if separable:
-      multiplier = max(1, depth // input_depth)
-      dw = tf.get_variable("dw", shape=[radius, radius, input_depth, multiplier],
-                           initializer=tf.uniform_unit_scaling_initializer())
-      pw = tf.get_variable("pw", shape=[1, 1, multiplier * input_depth, depth],
-                           initializer=tf.uniform_unit_scaling_initializer())
-      dw = maybe_bound_weights(dw)
-      pw = maybe_bound_weights(pw)
       # This does just what tf.nn.separable_conv2d would do but isn't impractically anal about
       # input_depth * multiplier > depth. In particular, it allows input_depth > depth.
-      z = tf.nn.depthwise_conv2d(x, dw, strides=[1, stride, stride, 1], padding=padding)
+      multiplier = max(1, depth // input_depth)
+      if radius > 1:
+        dw = tf.get_variable("dw", shape=[radius, radius, input_depth, multiplier],
+                             initializer=tf.uniform_unit_scaling_initializer())
+        dw = maybe_bound_weights(dw)
+        z = tf.nn.depthwise_conv2d(x, dw, strides=[1, stride, stride, 1], padding=padding)
+      else:
+        # 1x1 depthwise convolution would be redundant with the pointwise convolution below.
+        z = x
+      pw = tf.get_variable("pw", shape=[1, 1, multiplier * input_depth, depth],
+                           initializer=tf.uniform_unit_scaling_initializer())
+      pw = maybe_bound_weights(pw)
       y = tf.nn.conv2d(z, pw, strides=[1, 1, 1, 1], padding="VALID")
     else:
       w = tf.get_variable("w", shape=[radius, radius, input_depth, depth],
