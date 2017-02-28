@@ -142,8 +142,8 @@ class Model(object):
   def __init__(self, hp):
     self.hp = hp
     self.rtor = Rtor.make(hp.rtor.kind, hp.rtor)
-    self.gtor = Gtor.make(hp.gtor.kind, hp.rtor)
-    self.dtor = Dtor.make(hp.dtor.kind, hp.rtor)
+    self.gtor = Gtor.make(hp.gtor.kind, hp.gtor)
+    self.dtor = Dtor.make(hp.dtor.kind, hp.dtor)
 
   def __call__(self, inputs):
     # TODO wonder about whether real/fake should be based on different examples,
