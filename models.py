@@ -11,20 +11,28 @@ class SillyGtor(Gtor):
 
   def __init__(self, hp):
     self.hp = hp
+    # hardcode these as putting them in hyperparameters makes the output directory name (a
+    # serialization of hyperparameters) too long :-((((((((
+    hp.condition_mergeto = 256
+    hp.condition.depth = 64
+    hp.condition.size = 4
 
   def __call__(self, context, caption, latent):
-    condition = tfutil.layer([caption, latent], depth=256, scope="condition")
-    condition = tfutil.toconv(condition, depth=64, height=4, width=4, scope="c2h")
+    hp = self.hp
+    condition = tfutil.layer([caption, latent], depth=hp.condition_mergeto, scope="condition")
+    condition = tfutil.toconv(condition, depth=hp.condition.depth,
+                              height=hp.condition.size, width=hp.condition.size, scope="c2h")
     with tf.variable_scope("red"):
-      context_by_size = reduce_image(context, contexts=[condition], downto=2)
+      context_by_size = reduce_image(context, contexts=[condition], downto=2,
+                                     depth=hp.depth, radius=hp.radius)
     h = context_by_size[2]
     for size in [4, 8, 16, 32, 64]:
-      h = tfutil.residual_block(h, depth=128, radius=3, scope="res%i" % size)
+      h = tfutil.residual_block(h, depth=hp.depth, radius=hp.radius, scope="res%i" % size)
       h = tf.image.resize_bilinear(h, tf.shape(h)[1:3] * 2)
       h = tf.concat([h, context_by_size[size]], axis=3)
     for i in range(2):
-      h = tfutil.residual_block(h, depth=128, radius=3, scope="postres%i" % i)
-    x = tfutil.conv_layer(h, depth=context.shape[3], radius=3, fn=tf.nn.tanh, scope="h2x")
+      h = tfutil.residual_block(h, depth=hp.depth, radius=hp.radius, scope="postres%i" % i)
+    x = tfutil.conv_layer(h, depth=context.shape[3], radius=hp.radius, fn=tf.nn.tanh, scope="h2x")
     return H(output=x)
 
 class SillyDtor(Dtor):
@@ -32,12 +40,21 @@ class SillyDtor(Dtor):
 
   def __init__(self, hp):
     self.hp = hp
+    # hardcode these as putting them in hyperparameters makes the output directory name (a
+    # serialization of hyperparameters) too long :-((((((((
+    hp.condition.depth = 64
+    hp.condition.size = 4
+    hp.summary_depth = 128
 
   def __call__(self, image, caption):
-    caption = tfutil.toconv(caption, depth=64, height=4, width=4, scope="c2h")
+    hp = self.hp
+    caption = tfutil.toconv(caption, depth=hp.condition.depth,
+                            height=hp.condition.size, width=hp.condition.size, scope="c2h")
     with tf.variable_scope("red"):
-      h = reduce_image(image, contexts=[caption], downto=2)[2]
-    h = tfutil.fromconv(h, depth=128)
+      h = reduce_image(image, contexts=[caption], downto=2,
+                       depth=hp.depth, radius=hp.radius)[2]
+    h = tfutil.fromconv(h, depth=hp.summary_depth)
+    h = tf.nn.relu(h)
     y = tfutil.layer([h], depth=1, scope="h2y", normalize=False)
     return H(output=y)
 
@@ -166,13 +183,13 @@ class Model(object):
     assert h.gtor.parameters
     return h
 
-def reduce_image(image, contexts=[], downto=1, depth=128):
+def reduce_image(image, contexts=[], downto=1, depth=128, radius=3):
   reductions = dict()
   size = 64
   reductions[size] = image
   while size > downto:
     reduction = reductions[size]
-    reduction = tfutil.conv_layer(reduction, radius=3, depth=depth, scope="conv%i" % size)
+    reduction = tfutil.conv_layer(reduction, radius=radius, depth=depth, scope="conv%i" % size)
     reduction = tf.nn.max_pool(reduction, [1, 2, 2, 1], strides=[1, 2, 2, 1], padding="VALID")
     size //= 2
     # integrate caption/latent when they fit
