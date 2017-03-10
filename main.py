@@ -1,4 +1,4 @@
-import os
+import os, datetime
 import numpy as np, tensorflow as tf
 import util, tfutil, datasets, models
 from holster import H
@@ -19,7 +19,9 @@ def main(argv=()):
   config.hp = H(util.parse_hp(FLAGS.hp))
   print str(config.hp)
   config.label = util.make_label(config)
-  config.output_dir = os.path.join(config.base_output_dir, config.label)
+  dirname = "%s_%s" % (datetime.datetime.now().isoformat(), config.label)
+  dirname = dirname[:255] # >:-(((((((((((((((((((((((((((((((((((((((((
+  config.output_dir = os.path.join(config.base_output_dir, dirname)
 
   data = datasets.MscocoTF(config)
   config.alphabet_size = len(data.alphabet)
@@ -78,10 +80,10 @@ class Trainer(object):
 
   def __call__(self, session, supervisor):
     for _ in range(3):
-      for _ in range(3):
+      for _ in range(self.config.hp.dtor.steps):
         values = self.graph.train.Narrow("model.dtor.loss model.dtor.train_op summary_op").FlatCall(session.run)
         supervisor.summary_computed(session, values.summary_op)
-      for _ in range(3):
+      for _ in range(self.config.hp.gtor.steps):
         values = self.graph.train.Narrow("model.gtor.loss model.gtor.train_op summary_op").FlatCall(session.run)
         supervisor.summary_computed(session, values.summary_op)
     values = self.graph.valid.Narrow("model.dtor.loss summary_op global_step").FlatCall(session.run)
@@ -98,7 +100,7 @@ def make_graph(data, model, config, global_step=None, fold="valid", train=False)
     submodel = h.model[key]
     if train:
       submodel.gradients = tf.gradients(submodel.loss, submodel.parameters)
-      submodel.optimizer = tf.train.RMSPropOptimizer(1e-4, centered=True)
+      submodel.optimizer = tf.train.RMSPropOptimizer(config.hp[key].lr, centered=True)
       submodel.train_op = submodel.optimizer.apply_gradients(
         util.equizip(submodel.gradients, submodel.parameters),
         global_step=h.global_step)

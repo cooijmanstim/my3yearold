@@ -32,7 +32,7 @@ class SillyGtor(Gtor):
       h = tf.concat([h, context_by_size[size]], axis=3)
     for i in range(2):
       h = tfutil.residual_block(h, depth=hp.depth, radius=hp.radius, scope="postres%i" % i)
-    x = tfutil.conv_layer(h, depth=context.shape[3], radius=hp.radius, fn=tf.nn.tanh, scope="h2x")
+    x = tfutil.conv_layer(h, depth=3, radius=hp.radius, fn=tf.nn.tanh, scope="h2x")
     return H(output=x)
 
 class SillyDtor(Dtor):
@@ -157,10 +157,29 @@ class Model(object):
 
     with tf.variable_scope("gtor") as scope:
       # FIXME mscoco assumption
-      h.context_mask = np.ones((1, 64, 64, 1), dtype=float)
-      h.context_mask[:, 16:48, 16:48, :] = 0
-  
+      IMAGE_SIZE = 64
+      CROP_SIZE = 32
+      if self.hp.fixed_mask:
+        l = (IMAGE_SIZE - CROP_SIZE) // 2
+        b = l + CROP_SIZE
+        h.context_mask = np.ones((1, IMAGE_SIZE, IMAGE_SIZE, 1), dtype=float)
+        h.context_mask[l:b, l:b] = 0
+      else:
+        r = tf.range(IMAGE_SIZE)
+        ls = tf.random_uniform([tf.shape(inputs.image)[0], 2], maxval=IMAGE_SIZE - CROP_SIZE, dtype=tf.int32)
+        us = ls + CROP_SIZE
+        r = r[None, :]
+        ls, us = ls[:, :, None], us[:, :, None]
+        vertmask = ~((ls[:, 0] <= r) & (r < us[:, 0]))
+        horzmask = ~((ls[:, 1] <= r) & (r < us[:, 1]))
+        h.context_mask = tf.to_float(vertmask[:, :, None, None] |
+                                     horzmask[:, None, :, None])
+
       h.context = inputs.image * h.context_mask
+
+      if not self.hp.fixed_mask:
+        h.context = tf.concat([h.context, h.context_mask], axis=3)
+
       h.gtor = self.gtor(h.context, h.rtor.summary, inputs.latent)
       h.gtor.parameters = tfutil.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope)
 
@@ -173,10 +192,14 @@ class Model(object):
       h.dtor.real = self.dtor(h.real, h.rtor.summary)
       h.dtor.parameters = tfutil.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope)
     with tf.variable_scope("dtor", reuse=True):
-      h.dtor.fake = self.dtor(h.fake, h.rtor.summary)
+      h.dtor.fake = self.dtor(h.fakeraw, h.rtor.summary)
 
     h.dtor.loss = tf.reduce_mean( h.dtor.fake.output - h.dtor.real.output)
     h.gtor.loss = tf.reduce_mean(-h.dtor.fake.output)
+
+    if self.hp.l2:
+      # could reweight this, but WGAN loss doesn't seem to have a fixed scale
+      h.gtor.loss += self.hp.l2 * tf.reduce_mean((h.fakeraw - h.real)**2)
 
     h.gtor.parameters += h.rtor.parameters
     h.dtor.parameters += h.rtor.parameters
