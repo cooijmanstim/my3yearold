@@ -1,4 +1,5 @@
 import numbers
+import functools as ft, operator as op
 import numpy as np, tensorflow as tf
 import holster
 
@@ -25,6 +26,17 @@ def maybe_bound_weights(w):
 
 def get_depth(x):
   return x.get_shape().as_list()[-1]
+
+def collapse(x, axisgroups):
+  # use static shape info where available
+  old_shape = [x.shape.as_list()[i] if x.shape.as_list()[i] is not None else tf.shape(x)[i]
+               for i in range(x.shape.ndims)]
+  axisgroups = [[axes] if isinstance(axes, numbers.Integral) else axes for axes in axisgroups]
+  order = [axis for axes in axisgroups for axis in axes]
+  if order != list(range(len(order))):
+    x = tf.transpose(x, order)
+  shape = [ft.reduce(op.mul, [old_shape[axis] for axis in axes], 1) for axes in axisgroups]
+  return tf.reshape(x, shape)
 
 def layer(xs, fn=tf.nn.relu, normalize=True, bias=True, **project_terms_kwargs):
   project_terms_kwargs.setdefault("normalize", normalize)
@@ -77,16 +89,17 @@ def conv_layer(x, radius=None, stride=1, padding="SAME", depth=None, fn=tf.nn.re
     if separable:
       # This does just what tf.nn.separable_conv2d would do but isn't impractically anal about
       # input_depth * multiplier > depth. In particular, it allows input_depth > depth.
-      multiplier = max(1, depth // input_depth)
       if radius > 1:
+        multiplier = max(1, depth // input_depth)
         dw = tf.get_variable("dw", shape=[radius, radius, input_depth, multiplier],
                              initializer=tf.uniform_unit_scaling_initializer())
         dw = maybe_bound_weights(dw)
         z = tf.nn.depthwise_conv2d(x, dw, strides=[1, stride, stride, 1], padding=padding)
+        input_depth *= multiplier
       else:
         # 1x1 depthwise convolution would be redundant with the pointwise convolution below.
         z = x
-      pw = tf.get_variable("pw", shape=[1, 1, multiplier * input_depth, depth],
+      pw = tf.get_variable("pw", shape=[1, 1, input_depth, depth],
                            initializer=tf.uniform_unit_scaling_initializer())
       pw = maybe_bound_weights(pw)
       y = tf.nn.conv2d(z, pw, strides=[1, 1, 1, 1], padding="VALID")
@@ -132,3 +145,5 @@ def fromconv(x, depth, **project_terms_kwargs):
 
 def meanlogabs(x):
   return tf.reduce_mean(tf.log1p(tf.abs(x)))
+
+softmax_xent = tf.nn.softmax_cross_entropy_with_logits # geez

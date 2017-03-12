@@ -1,7 +1,9 @@
 import os, datetime
+import itertools as it
 import numpy as np, tensorflow as tf
-import util, tfutil, datasets, models
+import util, tfutil, datasets, models, maskers
 from holster import H
+from dynamite import D
 
 FLAGS = tf.flags.FLAGS
 tf.flags.DEFINE_string("base_output_dir", "/Tmp/cooijmat/gan", "root directory under which runs will be stored")
@@ -25,18 +27,35 @@ def main(argv=()):
 
   data = datasets.MscocoTF(config)
   config.alphabet_size = len(data.alphabet)
-  config.hp.data_dim = config.alphabet_size
+  config.hp.caption.depth = config.alphabet_size
 
   # NOTE: all hyperparameters must be set at this point
   util.prepare_run_directory(config)
 
   model = models.Model(config.hp)
-  trainer = Trainer(data, model, config)
+
+  config.hp.masker.image_size = config.hp.image.size # -_-
+  config.masker = maskers.make(config.hp.masker.kind, hp=config.hp.masker)
+
+  config.global_step = tf.Variable(0, name="global_step", trainable=False)
+  with tf.name_scope("train"):
+    trainer = Trainer(data, model, config)
+  tf.get_variable_scope().reuse_variables()
+  with tf.name_scope("valid"):
+    evaluator = Evaluator(data, model, config)
 
   supervisor = tf.train.Supervisor(logdir=config.output_dir, summary_op=None)
   with supervisor.managed_session() as session:
     while not supervisor.should_stop():
       trainer(session, supervisor)
+      if tf.train.global_step(session, config.global_step) % 100 == 0:
+        # TODO keep best
+        values = evaluator(session, supervisor)
+        print "%5i loss:%10f loss asked:%10f loss given:%10f" % (
+          tf.train.global_step(session, config.global_step),
+          values.model.loss, values.model.loss_asked, values.model.loss_given)
+      if tf.train.global_step(session, config.global_step) >= config.hp.num_steps:
+        break
     print "should stop"
 
 class Trainer(object):
@@ -44,77 +63,104 @@ class Trainer(object):
     self.data = data
     self.config = config
     self.model = model
-    self.graph = H(global_step=tf.Variable(0, name="global_step", trainable=False))
-    with tf.variable_scope("graph"):
-      self.graph.train = make_training_graph(data, model, config, fold="train",
-                                             global_step=self.graph.global_step)
-    with tf.variable_scope("graph", reuse=True):
-      self.graph.valid = make_evaluation_graph(data, model, config, fold="valid",
-                                               global_step=self.graph.global_step)
+    self.graph = make_training_graph(data, model, config, fold="train")
 
-    self.summaries = H(train=[], valid=[])
-
-    for key in "dtor gtor".split():
-      for parameter, gradient in util.equizip(self.graph.train.model[key].parameters,
-                                              self.graph.train.model[key].gradients):
-        self.summaries.train.append(
-          tf.summary.scalar("%s_gradmla_%s" %
-                            (key, parameter.name.replace(":", "_")),
-                            tfutil.meanlogabs(gradient)))
-
+    self.summaries = []
+    self.summaries.extend(self.graph.summaries)
+    for parameter, gradient in util.equizip(self.graph.parameters, self.graph.gradients):
+      self.summaries.append(
+        tf.summary.scalar("gradmla_%s" %
+                          parameter.name.replace(":", "_"),
+                          tfutil.meanlogabs(gradient)))
     for parameter in tf.trainable_variables():
-      self.summaries.valid.append(
+      self.summaries.append(
         tf.summary.scalar("mla_%s" % parameter.name.replace(":", "_"),
                           tfutil.meanlogabs(parameter)))
+    self.graph.summary_op = tf.summary.merge(self.summaries)
 
-    self.summaries.valid.extend([
-      tf.summary.image("real", self.graph.valid.model.real, max_outputs=3),
-      tf.summary.image("fake", self.graph.valid.model.fake, max_outputs=3),
-      tf.summary.image("fakeraw", self.graph.valid.model.fakeraw, max_outputs=3),
-      tf.summary.scalar("dtor.loss", self.graph.valid.model.dtor.loss),
-      tf.summary.scalar("gtor.loss", self.graph.valid.model.gtor.loss)
-    ])
-
-    self.graph.train.summary_op = tf.summary.merge(self.summaries.train)
-    self.graph.valid.summary_op = tf.summary.merge(self.summaries.valid)
+    self.feed_dicts = it.chain.from_iterable(
+      self.data.get_feed_dicts(self.graph.inputs, "train", batch_size=self.config.hp.batch_size, shuffle=True)
+      for _ in it.count(0))
 
   def __call__(self, session, supervisor):
-    for _ in range(3):
-      for _ in range(self.config.hp.dtor.steps):
-        values = self.graph.train.Narrow("model.dtor.loss model.dtor.train_op summary_op").FlatCall(session.run)
-        supervisor.summary_computed(session, values.summary_op)
-      for _ in range(self.config.hp.gtor.steps):
-        values = self.graph.train.Narrow("model.gtor.loss model.gtor.train_op summary_op").FlatCall(session.run)
-        supervisor.summary_computed(session, values.summary_op)
-    values = self.graph.valid.Narrow("model.dtor.loss summary_op global_step").FlatCall(session.run)
+    feed_dict = dict(next(self.feed_dicts))
+    feed_dict.update(self.config.masker.get_feed_dict(self.config.hp.batch_size))
+    values = self.graph.Narrow("model.loss train_op summary_op").FlatCall(
+      session.run, feed_dict=feed_dict)
     supervisor.summary_computed(session, values.summary_op)
-    print "%5i %f" % (values.global_step, values.model.dtor.loss)
+    if np.isnan(values.model.loss):
+      raise ValueError("nan encountered")
+    return values
 
-def make_graph(data, model, config, global_step=None, fold="valid", train=False):
+class Evaluator(object):
+  def __init__(self, data, model, config):
+    self.data = data
+    self.config = config
+    self.model = model
+    self.graph = make_evaluation_graph(data, model, config, fold="valid")
+
+    self.summaries = list(self.graph.summaries)
+    self.graph.summary_op = tf.summary.merge(self.summaries)
+
+  def __call__(self, session, supervisor):
+    # validate on one batch
+    batch_size = 10 * self.config.hp.batch_size
+    feed_dict = dict(next(self.data.get_feed_dicts(self.graph.inputs, "valid", batch_size=batch_size, shuffle=False)))
+    feed_dict.update(self.config.masker.get_feed_dict(batch_size))
+    values = self.graph.Narrow("model.loss model.loss_given model.loss_asked summary_op").FlatCall(
+      session.run, feed_dict=feed_dict)
+    supervisor.summary_computed(session, values.summary_op)
+    return values
+
+def make_graph(data, model, config, fold="valid"):
   h = H()
   h.inputs = data.get_variables([data.get_tfrecord_path(fold)], config.hp.batch_size)
-  h.inputs.latent = tf.truncated_normal([tf.shape(h.inputs.image)[0], config.hp.latent_dim])
-  h.global_step = global_step
-  h.model = model(h.inputs)
-  for key in "dtor gtor".split():
-    submodel = h.model[key]
-    if train:
-      submodel.gradients = tf.gradients(submodel.loss, submodel.parameters)
-      submodel.optimizer = tf.train.RMSPropOptimizer(config.hp[key].lr, centered=True)
-      submodel.train_op = submodel.optimizer.apply_gradients(
-        util.equizip(submodel.gradients, submodel.parameters),
-        global_step=h.global_step)
+  h.mask = config.masker.get_variable(tf.shape(h.inputs.image)[0])
+  h.global_step = config.global_step
+  h.model = model(image=h.inputs.image, mask=h.mask,
+                  caption=h.inputs.caption, caption_length=h.inputs.caption_length)
+
+  if D.train:
+    h.lr = tf.train.exponential_decay(
+      config.hp.lr.init, h.global_step, config.hp.lr.decay.interval,
+      config.hp.lr.decay.factor, staircase=True)
+    tf.summary.scalar("learning_rate", h.lr)
+
+    h.loss = h.model.loss
+    h.parameters = tf.trainable_variables()
+    h.gradients = tf.gradients(h.loss, h.parameters)
+    h.optimizer = tf.train.AdamOptimizer(h.lr)
+    h.train_op = h.optimizer.apply_gradients(
+      util.equizip(h.gradients, h.parameters),
+      global_step=h.global_step)
+
+  h.summaries = []
+  h.summaries.extend(
+    tf.summary.scalar(k, v)
+    for k, v in h.Narrow("model.loss model.loss_given model.loss_asked").Items())
+
+  if not D.train:
+    h.summaries.extend([
+      tf.summary.image("real", h.model.x, max_outputs=3),
+      tf.summary.image("fake", h.model.xhat, max_outputs=3),
+      tf.summary.image("realfake", tf.cast(h.mask * tf.cast(h.model.x, tf.float32) +
+                                           (1 - h.mask) * tf.cast(h.model.xhat, tf.float32),
+                                           tf.uint8),
+                       max_outputs=3),
+      tf.summary.image("entropies", h.model.entropies, max_outputs=3),
+    ])
+
   return h
 
 def make_training_graph(*args, **kwargs):
   kwargs.setdefault("fold", "train")
-  kwargs.setdefault("train", True)
-  return make_graph(*args, **kwargs)
+  with D.Bind(train=True):
+    return make_graph(*args, **kwargs)
 
 def make_evaluation_graph(*args, **kwargs):
   kwargs.setdefault("fold", "valid")
-  kwargs.setdefault("train", False)
-  return make_graph(*args, **kwargs)
+  with D.Bind(train=False):
+    return make_graph(*args, **kwargs)
 
 if __name__ == "__main__":
   tf.app.run()

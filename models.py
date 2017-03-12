@@ -2,63 +2,10 @@ import numpy as np, tensorflow as tf
 import util, tfutil, cells
 from holster import H
 
-class Rtor(util.Factory): pass
-class Gtor(util.Factory): pass
-class Dtor(util.Factory): pass
+class Convnet(util.Factory): pass
+class Reader(util.Factory): pass
 
-class SillyGtor(Gtor):
-  key = "silly"
-
-  def __init__(self, hp):
-    self.hp = hp
-    # hardcode these as putting them in hyperparameters makes the output directory name (a
-    # serialization of hyperparameters) too long :-((((((((
-    hp.condition_mergeto = 256
-    hp.condition.depth = 64
-    hp.condition.size = 4
-
-  def __call__(self, context, caption, latent):
-    hp = self.hp
-    condition = tfutil.layer([caption, latent], depth=hp.condition_mergeto, scope="condition")
-    condition = tfutil.toconv(condition, depth=hp.condition.depth,
-                              height=hp.condition.size, width=hp.condition.size, scope="c2h")
-    with tf.variable_scope("red"):
-      context_by_size = reduce_image(context, contexts=[condition], downto=2,
-                                     depth=hp.depth, radius=hp.radius)
-    h = context_by_size[2]
-    for size in [4, 8, 16, 32, 64]:
-      h = tfutil.residual_block(h, depth=hp.depth, radius=hp.radius, scope="res%i" % size)
-      h = tf.image.resize_bilinear(h, tf.shape(h)[1:3] * 2)
-      h = tf.concat([h, context_by_size[size]], axis=3)
-    for i in range(2):
-      h = tfutil.residual_block(h, depth=hp.depth, radius=hp.radius, scope="postres%i" % i)
-    x = tfutil.conv_layer(h, depth=3, radius=hp.radius, fn=tf.nn.tanh, scope="h2x")
-    return H(output=x)
-
-class SillyDtor(Dtor):
-  key = "silly"
-
-  def __init__(self, hp):
-    self.hp = hp
-    # hardcode these as putting them in hyperparameters makes the output directory name (a
-    # serialization of hyperparameters) too long :-((((((((
-    hp.condition.depth = 64
-    hp.condition.size = 4
-    hp.summary_depth = 128
-
-  def __call__(self, image, caption):
-    hp = self.hp
-    caption = tfutil.toconv(caption, depth=hp.condition.depth,
-                            height=hp.condition.size, width=hp.condition.size, scope="c2h")
-    with tf.variable_scope("red"):
-      h = reduce_image(image, contexts=[caption], downto=2,
-                       depth=hp.depth, radius=hp.radius)[2]
-    h = tfutil.fromconv(h, depth=hp.summary_depth)
-    h = tf.nn.relu(h)
-    y = tfutil.layer([h], depth=1, scope="h2y", normalize=False)
-    return H(output=y)
-
-class RecurrentRtor(Rtor):
+class RecurrentReader(Reader):
   key = "recurrent"
 
   def __init__(self, hp):
@@ -90,7 +37,7 @@ class RecurrentRtor(Rtor):
     h.output_length = length
     return h
 
-class ConvRtor(Rtor):
+class ConvReader(Reader):
   key = "conv"
 
   def __init__(self, hp):
@@ -110,7 +57,7 @@ class ConvRtor(Rtor):
     h.summary = tf.reduce_mean(h.output, axis=1)
     return h
 
-class CompositeRtor(Rtor):
+class CompositeReader(Reader):
   key = None # not constructible from hyperparameters
 
   def __init__(self, hp, children=()):
@@ -130,95 +77,69 @@ class CompositeRtor(Rtor):
     h.summary = z
     return h
 
-class QuasiRtor(CompositeRtor):
+class QuasiReader(CompositeReader):
   key = "quasi"
 
   def __init__(self, hp):
-    children = [("conv", ConvRtor(H(radius=hp.radius, size=3 * hp.size))),
-                ("rnn", RecurrentRtor(H(bidir=hp.bidir, cell=H(kind="quasi", size=hp.size, normalize=hp.normalize))))]
-    super(QuasiRtor, self).__init__(hp, children=children)
+    children = [("conv", ConvReader(H(radius=hp.radius, size=3 * hp.size))),
+                ("rnn", RecurrentReader(H(bidir=hp.bidir, cell=H(kind="quasi", size=hp.size, normalize=hp.normalize))))]
+    super(QuasiReader, self).__init__(hp, children=children)
+
+class StraightConvnet(Convnet):
+  key = "straight"
+
+  def __init__(self, hp):
+    self.hp = hp
+
+  def __call__(self, x, z):
+    hp = self.hp
+    for i in range(hp.profundity):
+      x = tfutil.residual_block(x, depth=hp.depth, radius=hp.radius, scope="res%i" % i)
+      # TODO: every once in a while use a Merger to merge z into h
+      x += 0 * tf.reduce_mean(z)
+    return H(output=x)
 
 class Model(object):
   def __init__(self, hp):
     self.hp = hp
-    self.rtor = Rtor.make(hp.rtor.kind, hp.rtor)
-    self.gtor = Gtor.make(hp.gtor.kind, hp.gtor)
-    self.dtor = Dtor.make(hp.dtor.kind, hp.dtor)
+    self.reader = Reader.make(hp.reader.kind, hp.reader)
+    self.convnet = Convnet.make(hp.convnet.kind, hp.convnet)
 
-  def __call__(self, inputs):
-    # TODO wonder about whether real/fake should be based on different examples,
-    # i.e. should have their own image placeholders
+  def __call__(self, image, mask, caption, caption_length):
+    hp = self.hp
     h = H()
 
-    with tf.variable_scope("rtor") as scope:
-      h.rtor = self.rtor(tf.one_hot(inputs.caption, self.hp.data_dim),
-                         length=inputs.caption_length)
-      h.rtor.parameters = tfutil.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope)
+    with tf.variable_scope("reader") as scope:
+      h.reader = self.reader(tf.one_hot(caption, hp.caption.depth),
+                             length=caption_length)
 
-    with tf.variable_scope("gtor") as scope:
-      # FIXME mscoco assumption
-      IMAGE_SIZE = 64
-      CROP_SIZE = 32
-      if self.hp.fixed_mask:
-        l = (IMAGE_SIZE - CROP_SIZE) // 2
-        b = l + CROP_SIZE
-        h.context_mask = np.ones((1, IMAGE_SIZE, IMAGE_SIZE, 1), dtype=float)
-        h.context_mask[l:b, l:b] = 0
-      else:
-        r = tf.range(IMAGE_SIZE)
-        ls = tf.random_uniform([tf.shape(inputs.image)[0], 2], maxval=IMAGE_SIZE - CROP_SIZE, dtype=tf.int32)
-        us = ls + CROP_SIZE
-        r = r[None, :]
-        ls, us = ls[:, :, None], us[:, :, None]
-        vertmask = ~((ls[:, 0] <= r) & (r < us[:, 0]))
-        horzmask = ~((ls[:, 1] <= r) & (r < us[:, 1]))
-        h.context_mask = tf.to_float(vertmask[:, :, None, None] |
-                                     horzmask[:, None, :, None])
+    h.x = image
+    h.px = tf.one_hot(h.x, hp.image.levels)
+    h.mask = mask
 
-      h.context = inputs.image * h.context_mask
+    h.px_conv = tfutil.collapse(h.px, [0, 1, 2, [3, 4]])
+    h.context = tf.concat([h.px_conv * h.mask, h.mask], axis=3)
 
-      if not self.hp.fixed_mask:
-        h.context = tf.concat([h.context, h.context_mask], axis=3)
+    with tf.variable_scope("convnet") as scope:
+      h.convnet = self.convnet(h.context, h.reader.summary)
 
-      h.gtor = self.gtor(h.context, h.rtor.summary, inputs.latent)
-      h.gtor.parameters = tfutil.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope)
+    h.exhat = tf.reshape(
+      tfutil.conv_layer(h.convnet.output, radius=1, depth=3 * hp.image.levels,
+                        fn=lambda x: x, scope="exhat"),
+      tf.shape(h.px))
+    h.pxhat = tf.nn.softmax(h.exhat)
+    h.xhat = tf.cast(tf.argmax(h.exhat, axis=4), tf.uint8)
 
-    h.real = inputs.image
+    h.losses = tfutil.softmax_xent(labels=h.px, logits=h.exhat)
+    # divide by number of variables masked out; this is the number of conditionals being trained
+    h.weights = 1. / tf.reduce_sum(1 - h.mask, axis=[1, 2, 3], keep_dims=True)
 
-    h.fakeraw = h.gtor.output
-    h.fake = h.context_mask * h.real + (1 - h.context_mask) * h.fakeraw
+    h.loss_given = tf.reduce_mean(h.losses * h.weights * h.mask)
+    h.loss_asked = tf.reduce_mean(h.losses * h.weights * (1 - h.mask))
 
-    with tf.variable_scope("dtor") as scope:
-      h.dtor.real = self.dtor(h.real, h.rtor.summary)
-      h.dtor.parameters = tfutil.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope)
-    with tf.variable_scope("dtor", reuse=True):
-      h.dtor.fake = self.dtor(h.fakeraw, h.rtor.summary)
+    h.loss = h.loss_asked
+    if hp.optimize_given:
+      h.loss += h.loss_given
 
-    h.dtor.loss = tf.reduce_mean( h.dtor.fake.output - h.dtor.real.output)
-    h.gtor.loss = tf.reduce_mean(-h.dtor.fake.output)
-
-    if self.hp.l2:
-      # could reweight this, but WGAN loss doesn't seem to have a fixed scale
-      h.gtor.loss += self.hp.l2 * tf.reduce_mean((h.fakeraw - h.real)**2)
-
-    h.gtor.parameters += h.rtor.parameters
-    h.dtor.parameters += h.rtor.parameters
-    assert h.gtor.parameters
+    h.entropies = tf.reduce_sum(tfutil.softmax_xent(labels=h.pxhat, logits=h.exhat), axis=3, keep_dims=True)
     return h
-
-def reduce_image(image, contexts=[], downto=1, depth=128, radius=3):
-  reductions = dict()
-  size = 64
-  reductions[size] = image
-  while size > downto:
-    reduction = reductions[size]
-    reduction = tfutil.conv_layer(reduction, radius=radius, depth=depth, scope="conv%i" % size)
-    reduction = tf.nn.max_pool(reduction, [1, 2, 2, 1], strides=[1, 2, 2, 1], padding="VALID")
-    size //= 2
-    # integrate caption/latent when they fit
-    reduction = tf.concat([reduction] +
-                          [context for context in contexts
-                           if context.shape[1] == size and context.shape[2] == size],
-                          axis=3)
-    reductions[size] = reduction
-  return reductions

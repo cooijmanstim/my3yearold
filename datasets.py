@@ -10,6 +10,7 @@ class Mscoco(object):
   IMAGE_HEIGHT = 64
   IMAGE_WIDTH = 64
   IMAGE_DEPTH = 3
+  LEVELS = 256
 
 class MscocoTF(Mscoco):
   def __init__(self, config):
@@ -43,7 +44,6 @@ class MscocoTF(Mscoco):
                         identifier=tf.FixedLenFeature([], tf.string)))
       image = tf.image.decode_jpeg(features["image"], channels=Mscoco.IMAGE_DEPTH)
       image.set_shape([Mscoco.IMAGE_HEIGHT, Mscoco.IMAGE_WIDTH, Mscoco.IMAGE_DEPTH])
-      image = tf.cast(image, tf.float32) * (2. / 255) - 1.
 
       caption = tf.decode_raw(features["caption"], tf.uint8)
       caption_length = tf.shape(caption)[0]
@@ -56,6 +56,9 @@ class MscocoTF(Mscoco):
                    capacity=30 * batch_size, dynamic_pad=True, allow_smaller_final_batch=True))
   
       return plural
+
+  def get_feed_dicts(self, *args, **kwargs):
+    return it.repeat({})
 
 class MscocoNP(Mscoco):
   def __init__(self, config):
@@ -90,11 +93,9 @@ class MscocoNP(Mscoco):
     self.alphabet = alphabet
 
   def get_variables(self):
-    # TODO: caller should construct latent placeholder themselves
-    #latent = tf.placeholder(tf.float32, [None, LATENT_DIM], name="latent")
     h = H()
-    h.image = tf.placeholder(tf.float32, [None, Mscoco.IMAGE_HEIGHT, Mscoco.IMAGE_WIDTH,
-                                          Mscoco.IMAGE_DEPTH], name="image")
+    h.image = tf.placeholder(tf.uint8, [None, Mscoco.IMAGE_HEIGHT, Mscoco.IMAGE_WIDTH,
+                                        Mscoco.IMAGE_DEPTH], name="image")
     h.caption = tf.placeholder(tf.int32, [None, None], name="caption")
     h.caption_length = tf.placeholder(tf.int32, [None], name="caption_length")
     return h
@@ -103,14 +104,14 @@ class MscocoNP(Mscoco):
   def get_filenames(self, fold):
     return tf.gfile.Glob(os.path.join(self.config.data_dir, "inpainting", "%s2014" % fold, "*.jpg"))
 
-  def get_batches(filenames, batch_size, shuffle=False):
-    return map(self.load_batch, util.batches(filenames, batch_size=batch_size, shuffle=shuffle))
+  def get_batches(self, filenames, batch_size, shuffle=False):
+    return iter(map(self.load_batch, util.batches(filenames, batch_size=batch_size, shuffle=shuffle)))
 
-  def get_feed_dicts(placeholders, filenames, batch_size, shuffle=False):
-    return map(ft.partial(self.get_feed_dict, placeholders),
-               self.get_batches(filenames, batch_size, shuffle=shuffle))
+  def get_feed_dicts(self, placeholders, filenames, batch_size, shuffle=False):
+    return iter(map(ft.partial(self.get_feed_dict, placeholders),
+                    self.get_batches(filenames, batch_size, shuffle=shuffle)))
 
-  def get_feed_dict(placeholders, values):
+  def get_feed_dict(self, placeholders, values):
     return dict(placeholders.Zip(values))
 
   def load_batch(self, filenames):
@@ -130,9 +131,7 @@ class MscocoNP(Mscoco):
     caption_string = "|".join(caption_strings)
     caption = np.array([self.alphabet[c] for c in caption_string], dtype=int)
   
-    image = np.array(Image.fromarray(np.array(Image.open(filename))), dtype=np.float32)
-    image /= 255 / 2.
-    image -= 1
+    image = np.array(Image.fromarray(np.array(Image.open(filename))), dtype=np.uint8)
   
     if image.ndim == 2:
       # grayscale image; just replicate across channels

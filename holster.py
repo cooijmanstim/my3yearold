@@ -1,4 +1,4 @@
-import sys
+import contextlib
 from collections import OrderedDict as ordict
 import itertools as it, functools as ft
 import util
@@ -6,7 +6,6 @@ import util
 # key can be
 #   composition of attr lookups: "attr1.attr2.attr3"
 #   disjunction of multiple space-separated keys: "attr1 attr2.attr3"
-#   (maybe, later: with wildcard expressions: "*.attr{1,2,3}.attr4")
 
 # NOTE: disjunctions grow quadratically
 def composekey(*keys):
@@ -37,11 +36,6 @@ def insubtree(subkey, key):
       return False
   return True
 
-# what do i really want
-#def keymatch(subkey, key, subthing=any, thing=any):
-#  return subthing(thing(issubkey(subalt, alt) for alt in key.split(" "))
-#                  for subalt in subkey.split(" "))
-
 def keyancestors(key, strict=False):
   alternatives = key.split(" ")
   for alternative in alternatives:
@@ -49,7 +43,6 @@ def keyancestors(key, strict=False):
     for i in range(1, len(parts) + (0 if strict else 1)):
       yield ".".join(parts[:i])
 
-# TODO Glob, Regex methods to get a HolsterGlobView/HolsterRegexView on more flexible selections of keys
 class BaseHolster(object):
   def __getattr__(self, key):
     if key[0].isupper():
@@ -142,6 +135,20 @@ class BaseHolster(object):
   def Zip(self, other):
     # NOTE: order determined by self
     return ((self.Get(key), other.Get(key)) for key in self.Keys())
+
+  @contextlib.contextmanager
+  def Bind(self, items=(), **kwargs):
+    old = H()
+    for key, value in it.chain(items, kwargs.items()):
+      if key in self:
+        old.Set(key, self[key])
+      self.Set(key, value)
+    yield self
+    for key, value in it.chain(items, kwargs.items()):
+      if key in old:
+        self.Set(key, old.Get(key))
+      else:
+        self.Delete(key)
 
 class Holster(BaseHolster):
   """Everything within reach."""
@@ -264,7 +271,7 @@ class HolsterNarrow(BaseHolster):
   def Narrow(self, key):
     return HolsterNarrow(self.Other, key)
 
-H = Holster # bite me
+H = Holster
 
 if __name__ == "__main__":
   import unittest

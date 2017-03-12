@@ -73,6 +73,7 @@ def make_label(config):
                      serialize_hp(config.hp, outer_separator="_"))
 
 def prepare_run_directory(config):
+  # FIXME instead make a flag resume_from, load hyperparameters from there
   if not config.resume:
     if tf.gfile.Exists(config.output_dir):
       tf.gfile.DeleteRecursively(config.output_dir)
