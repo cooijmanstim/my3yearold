@@ -23,20 +23,41 @@ def uncomposekey(prefix, key):
   return ".".join(key)
 
 def insubforest(subkey, key):
-  assert " " not in subkey
-  return any(insubtree(subkey, alt) for alt in key.split(" "))
+  """`subkey` has one of alternatives in `key` as prefix"""
+  try:
+    subalts = subalternatives(subkey, key)
+  except KeyError:
+    return False
+  return not subalts
 
 def insubtree(subkey, key):
-  assert " " not in key
-  subparts, parts = subkey.split("."), key.split(".")
-  if len(parts) > len(subparts):
+  """`subkey` has `key` as prefix"""
+  try:
+    subalt = subalternative(subkey, key)
+  except KeyError:
     return False
-  for subpart, part in zip(subparts, parts):
-    if subpart != part:
-      return False
-  return True
+  return not subalt
 
 def subalternative(key, alt):
+  """Leftover of constraint `alt` after selecting `key`.
+
+  Mainly used in Narrow, where a key may select a subtree of the non-narrowed Holster and needs
+  further narrowing. For example, if `h = H(a=H(b=3, c=5))` then `h.Narrow("a.b").a` should select
+  the narrowed subtree `HolsterSubtree(h, "a").Narrow("b")`. In this case, `subalternative("a",
+  "a.b") == "b"`, as `b` is the yet unenforced part of the narrowing constraint `a.b` after
+  selecting `a`.
+
+  Also used by `insubtree`, which requires that there is no leftover, i.e. `key` is fully underneath
+  `alt`.
+
+  Returns:
+    If `key` is a prefix of `alt`, returns `alt` with the prefix `key` removed. If `alt` is a prefix
+    of `key`, returns the empty string (meaning no constraints left to enforce).
+  Raises:
+    KeyError if `key` and `alt` do not share a prefix (i.e. `key` violates `alt`).
+  """
+  assert " " not in key
+  assert " " not in alt
   keyparts, altparts = key.split("."), alt.split(".")
   while keyparts and altparts:
     a, b = keyparts.pop(0), altparts.pop(0)
@@ -45,6 +66,26 @@ def subalternative(key, alt):
   return ".".join(altparts)
 
 def subalternatives(key, alts):
+  """Leftovers of constraints in `alts` after selecting `key`.
+
+  This is like `subalternative`, but `alts` is a composite key that represents the union of multiple
+  keys.
+
+  Mainly used in Narrow, where a key may select a subtree of the non-narrowed Holster and needs
+  further narrowing. For example, if `h = H(a=H(b=3, c=5))` then `h.Narrow("a.b").a` should select
+  the narrowed subtree `HolsterSubtree(h, "a").Narrow("b")`. In this case, `subalternative("a",
+  "a.b") == "b"`, as `b` is the yet unenforced part of the narrowing constraint `a.b` after
+  selecting `a`.
+
+  Also used by `insubforest`, which requires that there is no leftover, i.e. `key` is fully
+  underneath at least one of `alts`.
+
+  Returns:
+    A composite key disjoining the leftover constraints.
+  Raises:
+    KeyError if `key` violates all of `alts`.
+  """
+  assert " " not in key
   subalts = []
   for alt in alts.split(" "):
     try:
