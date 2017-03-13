@@ -36,6 +36,26 @@ def insubtree(subkey, key):
       return False
   return True
 
+def subalternative(key, alt):
+  keyparts, altparts = key.split("."), alt.split(".")
+  while keyparts and altparts:
+    a, b = keyparts.pop(0), altparts.pop(0)
+    if a != b:
+      raise KeyError()
+  return ".".join(altparts)
+
+def subalternatives(key, alts):
+  subalts = []
+  for alt in alts.split(" "):
+    try:
+      subalt = subalternative(key, alt)
+    except KeyError:
+      continue
+    subalts.append(subalt)
+  if not subalts:
+    raise KeyError()
+  return " ".join(subalt for subalt in subalts if subalt)
+
 def keyancestors(key, strict=False):
   alternatives = key.split(" ")
   for alternative in alternatives:
@@ -64,11 +84,15 @@ class BaseHolster(object):
   def __delitem__(self, key):
     self.Delete(key)
 
+  # NOTE: Holster.Keys() and Holster.__contains__() are inconsistent in the sense that keys not
+  # listed by Holster.Keys() may be reported as contained in the data structure. Keys() yields leaf
+  # node keys, whereas __contains__() is true for internal node keys as well.
   def __contains__(self, key):
-    value = self.Get(key)
-    if isinstance(value, BaseHolster) and not value:
+    try:
+      _ = self.Get(key)
+      return True
+    except KeyError:
       return False
-    return True
 
   def __iter__(self):
     return self.Keys()
@@ -211,6 +235,8 @@ class HolsterSubtree(BaseHolster):
     assert " " not in key
     self.Other = other
     self.Key = key
+    if not self:
+      raise KeyError("nonexistent subtree", self.Key)
 
   def Keys(self):
     for key in self.Other.Keys():
@@ -237,6 +263,12 @@ class HolsterNarrow(BaseHolster):
   def __init__(self, other, key):
     self.Other = other
     self.Key = key
+    self.RequireAllKeysExist()
+
+  def RequireAllKeysExist(self):
+    for alt in self.Key.split(" "):
+      if alt not in self.Other:
+        raise KeyError("narrowing to nonexistent key", alt)
 
   def Keys(self):
     for key in self.Other.Keys():
@@ -245,20 +277,46 @@ class HolsterNarrow(BaseHolster):
 
   def Get(self, key):
     assert " " not in key
-    if not insubforest(key, self.Key):
-      raise KeyError(key)
-    return self.Other.Get(key)
+    # two cases:
+    # (1) key is a (nonstrict) child of one of the self.Key alternatives.
+    #     In this case everything below key will match that self.Key alternative, and hence we
+    #     can just return self.Other.get(key) without any further narrowing constraints.
+    # (2) key selects a supertree of one of the self.Key alternatives.
+    #     In this case things below key may not match the self.Key alternative, and we need to
+    #     narrow the subtree returned from self.Other.get(key).
+    try:
+      subalts = subalternatives(key, self.Key)
+    except KeyError:
+      subalts = None
+    if subalts is None:
+      raise KeyError("key excluded by Narrow expression %s" % self.Key, key)
+    result = self.Other.Get(key)
+    if subalts and isinstance(result, HolsterSubtree):
+      result = result.Narrow(subalts)
+    return result
 
   def Set(self, key, value):
+    raise NotImplementedError() # not sure what to do until I need it
     assert " " not in key
-    if not insubforest(key, self.Key):
-      raise KeyError(key)
+    try:
+      subalts = subalternatives(key, self.Key)
+    except KeyError:
+      subalts = None
+    # for write operations, key must be a (nonstrict) child of one of the self.Key alternatives.
+    if subalts or subalts is None:
+      raise KeyError("cannot write outside Narrow expression %s" % self.Key, key)
     self.Other.Set(key, value)
 
   def Delete(self, key):
+    raise NotImplementedError() # not sure what to do until I need it
     assert " " not in key
-    if not insubforest(key, self.Key):
-      raise KeyError(key)
+    try:
+      subalts = subalternatives(key, self.Key)
+    except KeyError:
+      subalts = None
+    # for write operations, key must be a (nonstrict) child of one of the self.Key alternatives.
+    if subalts or subalts is None:
+      raise KeyError("cannot write outside Narrow expression %s" % self.Key, key)
     self.Other.Delete(key)
 
   def __repr__(self):
@@ -285,11 +343,9 @@ if __name__ == "__main__":
       self.assertEqual(h.c.f.g, 4)
       self.assertEqual(h.c.f.h, 4)
       self.assertEqual(h.c.f.i, [5])
-      g = h[""]
-      self.assertFalse(g)
-      g = h["c.d.e c.f.i"]
-      self.assertFalse(g.a)
-      self.assertFalse(g.c.f.g)
+      g = h.Narrow("c.d.e c.f.i")
+      with self.assertRaises(KeyError): g.a
+      with self.assertRaises(KeyError): g.c.f.g
       self.assertEqual(g.c.d.e, 3)
       self.assertEqual(g.c.f.i, [5])
       g = h.c.f
@@ -299,11 +355,16 @@ if __name__ == "__main__":
       self.assertEqual(h.FlatCall(lambda x: x), h)
       self.assertEqual(h.c.FlatCall(lambda x: x), h.c)
 
-    def regression1(self):
+    def test_subalternatives(self):
+      self.assertEqual(subalternatives("a", "a.b a.c.e a.c.d d.a"), "b c.e c.d")
+      with self.assertRaises(KeyError): subalternatives("a.e", "a.b a.c.e a.c.d d.a")
+      self.assertEqual(subalternatives("a.b", "a.b a.c.e a.c.d d.a"), "")
+
+    def test_regression1(self):
       h = H()
-      h.graph.train = 0
+      h["graph.train"] = 0
       h.graph.valid = 1
       self.assertEqual(set(h.graph.Keys()), set("train valid".split()))
-      self.assertEqual(set(h.graph["train valid"].Keys()), set("train valid".split()))
+      self.assertEqual(set(h.graph.Narrow("train valid").Keys()), set("train valid".split()))
 
   unittest.main()
