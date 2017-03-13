@@ -1,5 +1,5 @@
 import os, sys, shutil
-import numpy as np, tensorflow as tf
+import numpy as np
 
 def batches(xs, batch_size=1, shuffle=False):
   xs = list(xs)
@@ -49,38 +49,3 @@ class Factory(object):
         return subklass(*args, **kwargs)
     else:
       raise KeyError("unknown %s subclass key %s" % (klass, key))
-
-def parse_hp(s):
-  d = dict()
-  for a in s.split():
-    key, value = a.split("=")
-    try:
-      value = int(value)
-    except ValueError:
-      try:
-        value = float(value)
-      except ValueError:
-        pass
-    d[key] = value
-  return d
-
-def serialize_hp(hp, outer_separator=" ", inner_separator="="):
-  return outer_separator.join(sorted(["%s%s%s" % (k, inner_separator, v) for k, v in hp.Items()]))
-
-def make_label(config):
-  return "%s%s%s" % (config.basename,
-                     "_" if config.basename else "",
-                     serialize_hp(config.hp, outer_separator="_"))
-
-def prepare_run_directory(config):
-  # FIXME instead make a flag resume_from, load hyperparameters from there
-  if not config.resume:
-    if tf.gfile.Exists(config.output_dir):
-      tf.gfile.DeleteRecursively(config.output_dir)
-  if not tf.gfile.Exists(config.output_dir):
-    tf.gfile.MakeDirs(config.output_dir)
-  if not config.resume:
-    with open(os.path.join(config.output_dir, "hp.conf"), "w") as f:
-      f.write(serialize_hp(config.hp, outer_separator="\n"))
-    shutil.copytree(os.path.dirname(os.path.realpath(__file__)),
-                    os.path.join(config.output_dir, "code"))
