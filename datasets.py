@@ -1,7 +1,7 @@
-import os, shutil, hashlib, cPickle as pkl
+import re, os, shutil, hashlib, cPickle as pkl, nltk, tarfile, time, collections
 from collections import OrderedDict as ordict
-import functools as ft, itertools as it
-import tensorflow as tf
+import functools as ft, itertools as it, operator as op
+import tensorflow as tf, numpy as np
 from PIL import Image
 import util, tfutil
 from holster import H
@@ -17,8 +17,6 @@ class MscocoTF(Mscoco):
     self.config = config
     self.tfrecord_dir = os.path.join(self.config.data_dir, "tfrecord")
     self.ensure_local_copy()
-    self.alphabet = pkl.load(open(os.path.join(self.tfrecord_dir, "alphabet.pkl")))
-    print "TF alphabet md5sum %s" % hashlib.md5("".join(self.alphabet.keys())).hexdigest()
 
   def ensure_local_copy(self):
     if not tf.gfile.Exists(self.tfrecord_dir):
@@ -36,16 +34,22 @@ class MscocoTF(Mscoco):
           list(filenames), num_epochs=num_epochs)
       reader = tf.TFRecordReader()
       _, serialized_example = reader.read(filename_queue)
-      features = tf.parse_single_example(
-          serialized_example,
-          # in TF land, a variable-length string is a fixed-length scalar
-          features=dict(image=tf.FixedLenFeature([], tf.string),
-                        caption=tf.FixedLenFeature([], tf.string),
-                        identifier=tf.FixedLenFeature([], tf.string)))
-      image = tf.image.decode_jpeg(features["image"], channels=Mscoco.IMAGE_DEPTH)
+      # TODO threaded dequeue/jpeg decode, shufflequeue
+
+      context, sequence = tf.parse_single_sequence_example(
+        serialized_example,
+        context_features={
+          "image/data": tf.FixedLenFeature([], dtype=tf.string)
+        },
+        sequence_features={
+          "image/caption_characters": tf.FixedLenSequenceFeature([], dtype=tf.int64),
+          "image/caption_words":      tf.FixedLenSequenceFeature([], dtype=tf.int64),
+        })
+
+      image = tf.image.decode_jpeg(context["image/data"], channels=Mscoco.IMAGE_DEPTH)
       image.set_shape([Mscoco.IMAGE_HEIGHT, Mscoco.IMAGE_WIDTH, Mscoco.IMAGE_DEPTH])
 
-      caption = tf.decode_raw(features["caption"], tf.uint8)
+      caption = context["image/caption_%ss" % self.config.hp.caption.token]
       caption_length = tf.shape(caption)[0]
 
       singular = H(image=image, caption=caption, caption_length=caption_length)
@@ -70,27 +74,27 @@ class MscocoNP(Mscoco):
     if not tf.gfile.Exists(self.config.data_dir):
       print "copying data to", self.config.data_dir
       tf.gfile.MakeDirs(self.config.data_dir)
-      subprocess.check_call("tar xf".split() +
-                            [os.environ["MSCOCO_INPAINTING_TARBALL"]] +
-                            "--directory".split() +
-                            [self.config.data_dir])
+      tarfile.open(os.environ["MSCOCO_INPAINTING_TARBALL"], 'r:bz2').extractall(self.config.data_dir)
       print "done"
 
-  def load(self):
-    folds = dict(train=tf.gfile.Glob(os.path.join(self.config.data_dir, "inpainting", "train2014", "*.jpg")),
-                 valid=tf.gfile.Glob(os.path.join(self.config.data_dir, "inpainting",   "val2014", "*.jpg")))
-    captions = pkl.load(open(os.path.join(self.config.data_dir, "inpainting", "dict_key_imgID_value_caps_train_and_valid.pkl")))
-  
-    print "determining alphabet"
-    # NOTE: when we get the test set, make sure it doesn't change the alphabet, or else retrain the model
-    alphabet = set(it.chain.from_iterable(it.chain.from_iterable(caption_dict.values())))
-    alphabet.add("|") # we use the pipe character to concatenate multiple captions for one image
-    alphabet = ordict((character, code) for code, character in enumerate(sorted(alphabet)))
-    print "NP alphabet md5sum %s" % hashlib.md5("".join(alphabet.keys())).hexdigest()
+  def get_caption_string(self, identifier):
+    return "|".join(self.captions[identifier])
 
-    self.folds = folds
-    self.captions = captions
-    self.alphabet = alphabet
+  def get_tokenizer(self, token):
+    print "determining tokenmap"
+    start = time.time()
+    tokenizer = Tokenizer.make(token)
+    tokenizer.prepare("|".join(candidates) for candidates in self.captions.values())
+    end = time.time()
+    print "NP %s tokenmap checksum %s (%f seconds)" % (token, tokenizer.checksum, end - start)
+    return tokenizer
+
+  def load(self):
+    self.folds = dict(train=tf.gfile.Glob(os.path.join(self.config.data_dir, "inpainting", "train2014", "*.jpg")),
+                      valid=tf.gfile.Glob(os.path.join(self.config.data_dir, "inpainting",   "val2014", "*.jpg")))
+    self.captions = pkl.load(open(os.path.join(self.config.data_dir, "inpainting",
+                                               "dict_key_imgID_value_caps_train_and_valid.pkl")))
+    self.tokenizer = self.get_tokenizer(self.config.hp.caption.token)
 
   def get_variables(self):
     h = H()
@@ -119,22 +123,57 @@ class MscocoNP(Mscoco):
     h = H()
     h.images = np.array(images)
     h.caption_lengths = np.array(list(map(len, captions)))
-    h.captions = np.array([padto(caption, max(caption_lengths))
+    h.captions = np.array([padto(np.array(caption, dtype=int),
+                                 max(caption_lengths))
                            for caption in captions])
     return h
 
   def load_file(self, filename):
     identifier = os.path.splitext(os.path.basename(filename))[0]
-  
-    caption_strings = self.captions[identifier]
-    np.random.shuffle(caption_strings)
-    caption_string = "|".join(caption_strings)
-    caption = np.array([self.alphabet[c] for c in caption_string], dtype=int)
-  
+    caption = self.tokenizer.process(self.get_caption_string(identifier))
     image = np.array(Image.fromarray(np.array(Image.open(filename))), dtype=np.uint8)
-  
     if image.ndim == 2:
       # grayscale image; just replicate across channels
       image = image[:, :, None] * np.ones((Mscoco.IMAGE_DEPTH,))[None, None, :]
-  
     return image, caption
+
+class Tokenizer(util.Factory):
+  def process(self, string):
+    tokens = self.tokenize(string)
+    codes = [self.tokenmap[t] for t in tokens]
+    if np.random.rand() < 0.01:
+      print string, "->", tokens, "->", codes
+    return codes
+
+  @property
+  def checksum(self):
+    return hashlib.md5("".join(self.tokenmap.keys())).hexdigest()
+
+class WordTokenizer(Tokenizer):
+  key = "word"
+
+  def prepare(self, strings):
+    counts = collections.Counter(self.tokenize(" ".join(strings)))
+    tokens = list(reversed(sorted(counts.keys(), key=counts.__getitem__)))
+    rare_tokens = set(it.takewhile(lambda token: counts[token] < 5, tokens))
+    common_tokens = set(tokens) - rare_tokens
+    tokenmap = ordict((token, code) for code, token in enumerate(common_tokens))
+    # map rare tokens to a common <UNK> code
+    tokenmap.update((token, len(common_tokens)) for token in rare_tokens)
+    self.tokenmap = tokenmap
+
+  def tokenize(self, s):
+    return nltk.word_tokenize(
+      re.sub(r"[^\w\s.]+", r" ",
+             re.sub(r"([.!?|])+", r" \1 ", s)))
+
+class CharacterTokenizer(Tokenizer):
+  key = "character"
+
+  def prepare(self, strings):
+    tokens = set(self.tokenize("".join(strings)))
+    tokenmap = ordict((token, code) for code, token in enumerate(tokens))
+    self.tokenmap = tokenmap
+
+  def tokenize(self, s):
+    return list(s)

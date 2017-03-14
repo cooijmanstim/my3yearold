@@ -1,4 +1,4 @@
-import os, datetime
+import os, sys, datetime, shutil
 import itertools as it
 import numpy as np, tensorflow as tf
 import util, tfutil, datasets, models, maskers

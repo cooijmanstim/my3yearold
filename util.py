@@ -1,4 +1,3 @@
-import os, sys, shutil
 import numpy as np
 
 def batches(xs, batch_size=1, shuffle=False):
