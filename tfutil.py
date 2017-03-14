@@ -82,7 +82,7 @@ def batch_normalize(x, beta=None, gamma=None, epsilon=1e-5, scope=None, axis=FF_
       beta = tf.get_variable("beta", shape=mean.shape, initializer=tf.constant_initializer(0))
     return tf.nn.batch_normalization(x, mean, variance, beta, gamma, variance_epsilon=epsilon)
 
-def conv_layer(x, radius=None, stride=1, padding="SAME", depth=None, fn=tf.nn.relu, normalize=True, bias=True, separable=True, scope=None):
+def conv_layer(x, radius=None, stride=1, padding="SAME", depth=None, fn=tf.nn.relu, normalize=True, bias=True, separable=False, scope=None):
   with tf.variable_scope(scope or "conv", []):
     input_depth = get_depth(x)
 

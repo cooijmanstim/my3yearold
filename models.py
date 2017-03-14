@@ -94,7 +94,7 @@ class StraightConvnet(Convnet):
   def __call__(self, x, z):
     hp = self.hp
     for i in range(hp.profundity):
-      x = tfutil.residual_block(x, depth=hp.depth, radius=hp.radius, scope="res%i" % i)
+      x = tfutil.residual_block(x, depth=hp.depth, radius=hp.radius, separable=hp.separable, scope="res%i" % i)
       # TODO: every once in a while use a Merger to merge z into h
       x += 0 * tf.reduce_mean(z)
     return H(output=x)
@@ -125,7 +125,7 @@ class Model(object):
 
     h.exhat = tf.reshape(
       tfutil.conv_layer(h.convnet.output, radius=1, depth=3 * hp.image.levels,
-                        fn=lambda x: x, scope="exhat"),
+                        fn=lambda x: x, separable=hp.convnet.separable, scope="exhat"),
       tf.shape(h.px))
     h.pxhat = tf.nn.softmax(h.exhat)
     h.xhat = tf.cast(tf.argmax(h.exhat, axis=4), tf.uint8)

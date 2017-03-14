@@ -27,7 +27,7 @@ def main(argv=()):
 
   data = datasets.MscocoTF(config)
   config.alphabet_size = len(data.alphabet)
-  config.hp.caption.depth = config.alphabet_size
+  config.hp["caption.depth"] = config.alphabet_size
 
   # NOTE: all hyperparameters must be set at this point
   prepare_run_directory(config)
