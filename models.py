@@ -178,5 +178,5 @@ class Model(object):
 
     h.loss = h.loss_total if hp.optimize_given else h.loss_asked
 
-    h.entropies = tf.reduce_sum(tfutil.softmax_xent(labels=h.pxhat, logits=h.exhat), axis=3, keep_dims=True)
+    h.entropies = -tf.reduce_sum(tfutil.softmax_xent(labels=h.pxhat, logits=h.exhat), axis=3, keep_dims=True)
     return h
