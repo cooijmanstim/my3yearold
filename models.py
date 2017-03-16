@@ -172,12 +172,11 @@ class Model(object):
     # divide by number of variables masked out; this is the number of conditionals being trained
     h.weights = 1. / tf.reduce_sum(1 - h.mask, axis=[1, 2, 3], keep_dims=True)
 
-    h.loss_given = tf.reduce_mean(h.losses * h.weights * h.mask)
-    h.loss_asked = tf.reduce_mean(h.losses * h.weights * (1 - h.mask))
+    h.loss_total = tf.reduce_mean(h.losses * h.weights)
+    h.loss_given = tf.reduce_sum(h.losses * h.weights *      h.mask ) / tf.reduce_sum(    h.mask)
+    h.loss_asked = tf.reduce_sum(h.losses * h.weights * (1 - h.mask)) / tf.reduce_sum(1 - h.mask)
 
-    h.loss = h.loss_asked
-    if hp.optimize_given:
-      h.loss += h.loss_given
+    h.loss = h.loss_total if hp.optimize_given else h.loss_asked
 
     h.entropies = tf.reduce_sum(tfutil.softmax_xent(labels=h.pxhat, logits=h.exhat), axis=3, keep_dims=True)
     return h
