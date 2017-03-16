@@ -38,12 +38,26 @@ class MscocoTF(Mscoco):
 
   def get_variables(self, filenames, batch_size, num_epochs=None):
     with tf.name_scope('input'):
-      filename_queue = tf.train.string_input_producer(
-          list(filenames), num_epochs=num_epochs)
       reader = tf.TFRecordReader()
-      _, serialized_example = reader.read(filename_queue)
-      # TODO threaded dequeue/jpeg decode, shufflequeue
 
+      filename_queue = tf.train.string_input_producer(
+        list(filenames), num_epochs=num_epochs, name="filequeue")
+
+      record_queue_capacity = 10000
+      record_queue = tf.RandomShuffleQueue(capacity=record_queue_capacity,
+                                           min_after_dequeue=record_queue_capacity // 2,
+                                           dtypes=[tf.string], name="shufflequeue")
+      enqueue_ops = []
+      for _ in range(2):
+        _, record = reader.read(filename_queue)
+        enqueue_ops.append(record_queue.enqueue([record]))
+      tf.train.queue_runner.add_queue_runner(tf.train.queue_runner.QueueRunner(
+          record_queue, enqueue_ops))
+      tf.summary.scalar(
+          "queue/%s/fraction_of_%d_full" % (record_queue.name, record_queue_capacity),
+          tf.cast(record_queue.size(), tf.float32) / record_queue_capacity)
+
+      serialized_example = record_queue.dequeue()
       context, sequence = tf.parse_single_sequence_example(
         serialized_example,
         context_features={
@@ -61,11 +75,10 @@ class MscocoTF(Mscoco):
       caption_length = tf.shape(caption)[0]
 
       singular = H(image=image, caption=caption, caption_length=caption_length)
-  
-      # FIXME: batch doesn't do shuffling :-( but it does do dynamic padding
-      plural = singular.FlatCall(
-        ft.partial(tf.train.batch, batch_size=batch_size, num_threads=2,
-                   capacity=30 * batch_size, dynamic_pad=True, allow_smaller_final_batch=True))
+
+      plural = singular.FlatCall(tf.train.batch, batch_size=batch_size, num_threads=2,
+                                 capacity=30 * batch_size, dynamic_pad=True,
+                                 allow_smaller_final_batch=True)
   
       return plural
 
