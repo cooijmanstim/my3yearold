@@ -25,7 +25,7 @@ class RecurrentReader(Reader):
         initial_state_fw=[tf.tile(s[None, :], [batch_size, 1]) for s in h.cell_fw.initial_state_parameters],
         initial_state_bw=[tf.tile(s[None, :], [batch_size, 1]) for s in h.cell_bw.initial_state_parameters],
         scope="birnn")
-      h.summary = tf.concat([output[:, -1] for output in h.output], axis=1)
+      h.output = tf.concat(h.output, axis=2)
     else:
       h.cell = cells.make(hp.cell.kind, num_units=hp.cell.size, normalize=hp.cell.normalize, scope="fw")
       batch_size = tf.shape(x)[0]
@@ -33,8 +33,8 @@ class RecurrentReader(Reader):
         h.cell, x, sequence_length=length,
         initial_state=[tf.tile(s[None, :], [batch_size, 1]) for s in h.cell.initial_state_parameters],
         scope="rnn")
-      h.summary = h.output[:, -1]
     h.output_length = length
+    h.summary = h.output[:, -1]
     return h
 
 class ConvReader(Reader):
@@ -91,19 +91,57 @@ class StraightConvnet(Convnet):
   def __init__(self, hp):
     self.hp = hp
 
-  def __call__(self, x, z):
+  def __call__(self, x, cb):
     hp = self.hp
     for i in range(hp.profundity):
       x = tfutil.residual_block(x, depth=hp.depth, radius=hp.radius, separable=hp.separable, scope="res%i" % i)
-      # TODO: every once in a while use a Merger to merge z into h
-      x += 0 * tf.reduce_mean(z)
+      x = cb(i, x)
     return H(output=x)
+
+class Merger(util.Factory):
+  def __init__(self, hp):
+    self.hp = hp
+
+  def should_merge(self, i):
+    return i in map(int, self.hp.layers.split(","))
+
+  def __call__(self, i, x, reader):
+    if not self.should_merge(i):
+      return x
+    with tf.variable_scope("merger%i" % i):
+      return self.merge(x, reader)
+
+class ConvMerger(Merger):
+  key = "conv"
+
+  def merge(self, x, reader):
+    z = reader.summary
+    z = tfutil.toconv(z, height=x.shape[1], width=x.shape[2], depth=self.hp.depth)
+    return tf.stack([x, z], axis=3)
+
+class AttentionMerger(Merger):
+  key = "attention"
+
+  def merge(self, x, reader):
+    z = reader.output
+    xdepth, zdepth = tfutil.get_depth(x), tfutil.get_depth(z)
+    # attention weights by inner product
+    u = tf.get_variable("u", shape=[xdepth, zdepth],
+                        initializer=tf.uniform_unit_scaling_initializer())
+    w = tf.einsum("bhwi,ij,btj->bhwt", x, u, z)
+    w = tf.nn.softmax(w)
+    # attend
+    y = tf.einsum("bhwt,btd->bhwd", w, z)
+    if xdepth != zdepth:
+      y = tfutil.conv_layer(y, depth=xdepth, normalize=False, fn=lambda x: x)
+    return x + y
 
 class Model(object):
   def __init__(self, hp):
     self.hp = hp
     self.reader = Reader.make(hp.reader.kind, hp.reader)
     self.convnet = Convnet.make(hp.convnet.kind, hp.convnet)
+    self.merger = Merger.make(hp.merger.kind, hp.merger)
 
   def __call__(self, image, mask, caption, caption_length):
     hp = self.hp
@@ -121,7 +159,7 @@ class Model(object):
     h.context = tf.concat([h.px_conv * h.mask, h.mask], axis=3)
 
     with tf.variable_scope("convnet") as scope:
-      h.convnet = self.convnet(h.context, h.reader.summary)
+      h.convnet = self.convnet(h.context, lambda i, x: self.merger(i, x, h.reader))
 
     h.exhat = tf.reshape(
       tfutil.conv_layer(h.convnet.output, radius=1, depth=3 * hp.image.levels,
