@@ -146,6 +146,7 @@ def make_graph(data, model, config, fold="valid"):
                                            (1 - h.mask) * tf.cast(h.model.xhat, tf.float32),
                                            tf.uint8),
                        max_outputs=3),
+      tf.summary.image("mask", h.mask, max_outputs=3),
       tf.summary.image("entropies", h.model.entropies, max_outputs=3),
     ])
 

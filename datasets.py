@@ -79,7 +79,7 @@ class MscocoTF(Mscoco):
       plural = singular.FlatCall(tf.train.batch, batch_size=batch_size, num_threads=2,
                                  capacity=30 * batch_size, dynamic_pad=True,
                                  allow_smaller_final_batch=True)
-  
+
       return plural
 
   def get_feed_dicts(self, *args, **kwargs):
