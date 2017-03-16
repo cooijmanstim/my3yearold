@@ -155,8 +155,9 @@ class Model(object):
     h.px = tf.one_hot(h.x, hp.image.levels)
     h.mask = mask
 
-    h.px_conv = tfutil.collapse(h.px, [0, 1, 2, [3, 4]])
-    h.context = tf.concat([h.px_conv * h.mask, h.mask], axis=3)
+    h.context = tf.concat([tfutil.collapse(h.px * mask[:, :, :, :, None],
+                                           [0, 1, 2, [3, 4]]),
+                           h.mask], axis=3)
 
     with tf.variable_scope("convnet") as scope:
       h.convnet = self.convnet(h.context, lambda i, x: self.merger(i, x, h.reader))

@@ -52,7 +52,7 @@ class OrderlessMasker(BaseMasker):
     mask_size = tf.random_uniform([B], maxval=H * W * D, dtype=tf.int64)
     # generate a binary mask with `mask_size` ones, then shuffle the ones into random places. Note
     # batch axis comes second because `tf.random_shuffle` only works along the first axis -_-
-    mask = tf.to_float(tf.range(H * W * D)[:, None] < mask_size[None, :])
+    mask = tf.to_float(tf.range(H * W * D, dtype=tf.int64)[:, None] < mask_size[None, :])
     mask = tf.random_shuffle(mask)
     mask = tf.reshape(tf.transpose(mask), [B, H, W, D])
     return mask
