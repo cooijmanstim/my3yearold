@@ -41,6 +41,25 @@ class ContiguousMasker(BaseMasker):
   def get_feed_dict(self, batch_size):
     return {}
 
+class OrderlessMasker(BaseMasker):
+  key = "orderless"
+
+  def __init__(self, hp):
+    self.hp = hp
+
+  def get_variable(self, batch_size):
+    B, H, W, D = batch_size, self.hp.image_size, self.hp.image_size, 3
+    mask_size = tf.random_uniform([B], maxval=H * W * D, dtype=tf.int64)
+    # generate a binary mask with `mask_size` ones, then shuffle the ones into random places. Note
+    # batch axis comes second because `tf.random_shuffle` only works along the first axis -_-
+    mask = tf.to_float(tf.range(H * W * D)[:, None] < mask_size[None, :])
+    mask = tf.random_shuffle(mask)
+    mask = tf.reshape(tf.transpose(mask), [B, H, W, D])
+    return mask
+
+  def get_feed_dict(self, batch_size):
+    return {}
+
 class FunctionMasker(BaseMasker):
   key = None
 
