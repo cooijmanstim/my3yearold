@@ -128,7 +128,9 @@ def residual_block(h, scope=None, depth=None, fn=tf.nn.relu, **conv_layer_kwargs
     if depth == input_depth:
       h_thru = h
     else:
-      h_thru = conv_layer(h, scope="thru", bias=False, **conv_layer_kwargs)
+      thru_layer_kwargs = dict(conv_layer_kwargs)
+      thru_layer_kwargs["radius"] = 1
+      h_thru = conv_layer(h, scope="thru", bias=False, **thru_layer_kwargs)
     h = conv_layer(h, scope="pre",  **conv_layer_kwargs)
     h = fn(h)
     h = conv_layer(h, scope="post", **conv_layer_kwargs)
