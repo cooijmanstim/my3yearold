@@ -26,8 +26,7 @@ def main(argv=()):
   config.output_dir = os.path.join(config.base_output_dir, dirname)
 
   data = datasets.MscocoTF(config)
-  config.alphabet_size = len(data.alphabet)
-  config.hp["caption.depth"] = config.alphabet_size
+  config.hp.caption.depth = data.caption_depth
 
   # NOTE: all hyperparameters must be set at this point
   prepare_run_directory(config)

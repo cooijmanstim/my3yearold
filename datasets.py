@@ -17,6 +17,11 @@ class MscocoTF(Mscoco):
     self.config = config
     self.tfrecord_dir = os.path.join(self.config.data_dir, "tfrecord")
     self.ensure_local_copy()
+    self.load()
+
+  @property
+  def caption_depth(self):
+    return len(self.tokenmap)
 
   def ensure_local_copy(self):
     if not tf.gfile.Exists(self.tfrecord_dir):
@@ -24,6 +29,9 @@ class MscocoTF(Mscoco):
       tf.gfile.MakeDirs(self.config.data_dir)
       shutil.copytree(os.environ["MSCOCO_TFRECORD_DIR"], self.tfrecord_dir)
       print "done"
+
+  def load(self):
+    self.tokenmap = pkl.load(open(os.path.join(self.tfrecord_dir, "tokenmap_%s.pkl" % self.config.hp.caption.token)))
 
   def get_tfrecord_path(self, fold):
     return os.path.join(self.config.data_dir, "tfrecord", "%s.tfrecords" % fold)
@@ -49,7 +57,7 @@ class MscocoTF(Mscoco):
       image = tf.image.decode_jpeg(context["image/data"], channels=Mscoco.IMAGE_DEPTH)
       image.set_shape([Mscoco.IMAGE_HEIGHT, Mscoco.IMAGE_WIDTH, Mscoco.IMAGE_DEPTH])
 
-      caption = context["image/caption_%ss" % self.config.hp.caption.token]
+      caption = sequence["image/caption_%ss" % self.config.hp.caption.token]
       caption_length = tf.shape(caption)[0]
 
       singular = H(image=image, caption=caption, caption_length=caption_length)
@@ -69,6 +77,10 @@ class MscocoNP(Mscoco):
     self.config = config
     self.ensure_local_copy()
     self.load()
+
+  @property
+  def caption_depth(self):
+    return len(self.tokenizer.tokenmap)
 
   def ensure_local_copy(self):
     if not tf.gfile.Exists(self.config.data_dir):
@@ -90,8 +102,8 @@ class MscocoNP(Mscoco):
     return tokenizer
 
   def load(self):
-    self.folds = dict(train=tf.gfile.Glob(os.path.join(self.config.data_dir, "inpainting", "train2014", "*.jpg")),
-                      valid=tf.gfile.Glob(os.path.join(self.config.data_dir, "inpainting",   "val2014", "*.jpg")))
+    self.folds = dict(train=self.get_filenames("train"),
+                      valid=self.get_filenames("valid"))
     self.captions = pkl.load(open(os.path.join(self.config.data_dir, "inpainting",
                                                "dict_key_imgID_value_caps_train_and_valid.pkl")))
     self.tokenizer = self.get_tokenizer(self.config.hp.caption.token)
@@ -106,6 +118,7 @@ class MscocoNP(Mscoco):
 
   @util.memo
   def get_filenames(self, fold):
+    fold = dict(train="train", valid="val")[fold] # -_-
     return tf.gfile.Glob(os.path.join(self.config.data_dir, "inpainting", "%s2014" % fold, "*.jpg"))
 
   def get_batches(self, filenames, batch_size, shuffle=False):

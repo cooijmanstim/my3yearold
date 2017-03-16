@@ -18,6 +18,12 @@ def main():
   tokenizers = ordict((token, datasource.get_tokenizer(token))
                       for token in "character word".split())
 
+  for token, tokenizer in tokenizers.items():
+    tokenmap_path = os.path.join(tfrecord_dir, "tokenmap_%s.pkl" % token)
+    print "writing to", tokenmap_path
+    pkl.dump(tokenizer.tokenmap, open(tokenmap_path, "wb"))
+    print "done"
+
   def _to_sequence_example(image_path):
     identifier = os.path.splitext(os.path.basename(image_path))[0]
     caption_words = tokenizers["word"].process(datasource.get_caption_string(identifier))
