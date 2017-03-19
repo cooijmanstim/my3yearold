@@ -18,9 +18,9 @@ def main(argv=()):
              base_output_dir=FLAGS.base_output_dir,
              basename=FLAGS.basename,
              resume=FLAGS.resume)
-  config.hp = H(parse_hp(FLAGS.hp))
+  config.hp = H(util.parse_hp(FLAGS.hp))
   print str(config.hp)
-  config.label = make_label(config)
+  config.label = util.make_label(config)
   dirname = "%s_%s" % (datetime.datetime.now().isoformat(), config.label)
   dirname = dirname[:255] # >:-(((((((((((((((((((((((((((((((((((((((((
   config.output_dir = os.path.join(config.base_output_dir, dirname)
@@ -161,28 +161,6 @@ def make_evaluation_graph(*args, **kwargs):
   kwargs.setdefault("fold", "valid")
   with D.Bind(train=False):
     return make_graph(*args, **kwargs)
-
-def parse_hp(s):
-  d = dict()
-  for a in s.split():
-    key, value = a.split("=")
-    try:
-      value = int(value)
-    except ValueError:
-      try:
-        value = float(value)
-      except ValueError:
-        pass
-    d[key] = value
-  return d
-
-def serialize_hp(hp, outer_separator=" ", inner_separator="="):
-  return outer_separator.join(sorted(["%s%s%s" % (k, inner_separator, v) for k, v in hp.Items()]))
-
-def make_label(config):
-  return "%s%s%s" % (config.basename,
-                     "_" if config.basename else "",
-                     serialize_hp(config.hp, outer_separator="_"))
 
 def prepare_run_directory(config):
   # FIXME instead make a flag resume_from, load hyperparameters from there
