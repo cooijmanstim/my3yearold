@@ -201,6 +201,15 @@ class BaseHolster(object):
     # NOTE: order determined by self
     return ((self.Get(key), other.Get(key)) for key in self.Keys())
 
+  def AsDict(self):
+    return ordict(self.Items())
+
+  def With(self, items, **kwargs):
+    h = H(self)
+    h.Update(items)
+    h.Update(kwargs)
+    return h
+
   @contextlib.contextmanager
   def Bind(self, items=(), **kwargs):
     old = H()

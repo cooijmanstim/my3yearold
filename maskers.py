@@ -28,6 +28,15 @@ class ContiguousMasker(BaseMasker):
   def __init__(self, hp):
     self.hp = hp
 
+  def get_value(self, batch_size):
+    mask = np.ones([batch_size, self.hp.image_size, self.hp.image_size, 3], dtype=np.float32)
+    topleft = np.random.randint(self.hp.image_size - self.hp.size, size=[batch_size, 2])
+    vertical = topleft[:, 0, None] + np.arange(self.hp.size)[None, :]
+    horizontal = topleft[:, 1, None] + np.arange(self.hp.size)[None, :]
+    mask[np.arange(batch_size)[:, None, None], vertical[:, :, None], horizontal[:, None, :], :] = 0.
+    assert np.allclose((1 - mask).sum(axis=(0, 1, 2)), batch_size * self.hp.size**2)
+    return mask
+
   def get_variable(self, batch_size):
     r = tf.range(self.hp.image_size)
     ls = tf.random_uniform([batch_size, 2], maxval=self.hp.image_size - self.hp.size, dtype=tf.int32)
