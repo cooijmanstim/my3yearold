@@ -106,12 +106,20 @@ class MscocoNP(Mscoco):
     return "|".join(self.captions[identifier])
 
   def get_tokenizer(self, token):
-    print "determining tokenmap"
-    start = time.time()
-    tokenizer = Tokenizer.make(token)
-    tokenizer.prepare("|".join(candidates) for candidates in self.captions.values())
-    end = time.time()
-    print "NP %s tokenmap checksum %s (%f seconds)" % (token, tokenizer.checksum, end - start)
+    cache_path = os.path.join(self.config.data_dir,
+                              "tokenizer_%s.pkl" % self.config.hp.caption.token)
+    try:
+      with open(cache_path, "rb") as cache:
+        tokenizer = pkl.load(cache)
+    except IOError:
+      print "determining tokenmap"
+      start = time.time()
+      tokenizer = Tokenizer.make(token)
+      tokenizer.prepare("|".join(candidates) for candidates in self.captions.values())
+      end = time.time()
+      print "NP %s tokenmap checksum %s (%f seconds)" % (token, tokenizer.checksum, end - start)
+      with open(cache_path, "wb") as cache:
+        pkl.dump(tokenizer, cache)
     return tokenizer
 
   def load(self):
@@ -145,13 +153,13 @@ class MscocoNP(Mscoco):
     return dict(placeholders.Zip(values))
 
   def load_batch(self, filenames):
-    images, captions = zip(*list(map(load_file, filenames)))
+    images, captions = zip(*list(map(self.load_file, filenames)))
     h = H()
-    h.images = np.array(images)
-    h.caption_lengths = np.array(list(map(len, captions)))
-    h.captions = np.array([padto(np.array(caption, dtype=int),
-                                 max(caption_lengths))
-                           for caption in captions])
+    h.image = np.array(images)
+    h.caption_length = np.array(list(map(len, captions)))
+    h.caption = np.array([util.padto(np.array(caption, dtype=int),
+                                     max(h.caption_length))
+                          for caption in captions])
     return h
 
   def load_file(self, filename):
@@ -167,8 +175,6 @@ class Tokenizer(util.Factory):
   def process(self, string):
     tokens = self.tokenize(string)
     codes = [self.tokenmap[t] for t in tokens]
-    if np.random.rand() < 0.01:
-      print string, "->", tokens, "->", codes
     return codes
 
   @property
