@@ -123,17 +123,15 @@ class AttentionMerger(Merger):
   key = "attention"
 
   def merge(self, x, reader):
-    z = reader.output
-    xdepth, zdepth = tfutil.get_depth(x), tfutil.get_depth(z)
+    depth = tfutil.get_depth(x)
+    z = tf.reshape(tfutil.layer([tfutil.collapse(reader.output, [[0, 1], 2])], depth=depth),
+                   [tf.shape(reader.output)[0], tf.shape(reader.output)[1], depth])
     # attention weights by inner product
-    u = tf.get_variable("u", shape=[xdepth, zdepth],
-                        initializer=tf.uniform_unit_scaling_initializer())
+    u = tf.get_variable("u", initializer=tf.constant(np.eye(depth).astype(np.float32)))
     w = tf.einsum("bhwi,ij,btj->bhwt", x, u, z)
     w = tf.nn.softmax(w)
     # attend
     y = tf.einsum("bhwt,btd->bhwd", w, z)
-    if xdepth != zdepth:
-      y = tfutil.conv_layer(y, depth=xdepth, normalize=False, fn=lambda x: x)
     return x + y
 
 class Model(object):
