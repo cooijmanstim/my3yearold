@@ -1,14 +1,17 @@
 import os, sys, datetime, shutil
 import itertools as it
+import progressbar
 import numpy as np, tensorflow as tf
+import scipy.misc
 import util, tfutil, datasets, models, maskers
 from holster import H
 from dynamite import D
 
 FLAGS = tf.flags.FLAGS
 tf.flags.DEFINE_string("checkpoint", None, "path to directory containing ckpt")
+tf.flags.DEFINE_string("strategy", "", "sampling strategy (e.g. UniformAncestralSampler)")
 tf.flags.DEFINE_string("basename", "", "base name for run")
-tf.flags.DEFINE_integer("num_samples", 100, "number of samples to generate")
+tf.flags.DEFINE_integer("num_samples", 20, "number of samples to generate")
 tf.flags.DEFINE_float("temperature", 1., "softmax temperature")
 
 # generate based on validation samples.
@@ -45,70 +48,38 @@ def main(argv=()):
   config.hp.masker.image_size = config.hp.image.size # -_-
   config.masker = maskers.make(config.hp.masker.kind, hp=config.hp.masker)
 
-  sampler = Sampler(data, model, config)
+  graph = make_graph(data, model, config)
 
   saver = tf.train.Saver()
   session = tf.Session()
   saver.restore(session, FLAGS.checkpoint)
 
-  sampler(session, data)
+  def predictor(image, mask):
+    feed_dict={
+      graph.inputs.image: image,
+      graph.inputs.caption: original.caption,
+      graph.inputs.caption_length: original.caption_length,
+      graph.mask: mask,
+    }
+    values = graph.Narrow("model.pxhat").FlatCall(session.run, feed_dict=feed_dict)
+    return values.model.pxhat
 
-class Sampler(object):
-  def __init__(self, data, model, config):
-    self.data = data
-    self.config = config
-    self.model = model
-    self.graph = make_graph(data, model, config)
+  config.predictor = predictor
+  sampler = ToplevelSampler.make(FLAGS.strategy, config)
 
-  def __call__(self, session, supervisor):
-    mask = maskers.ContiguousMasker(H(image_size=64, size=32)).get_value(self.config.num_samples)
-    original = next(self.data.get_batches(self.data.get_filenames("valid"),
-                                          batch_size=self.config.num_samples, shuffle=False))
+  masks = maskers.ContiguousMasker(H(image_size=64, size=32)).get_value(config.num_samples)
+  original = next(data.get_batches(data.get_filenames("valid"),
+                                   batch_size=config.num_samples, shuffle=False))
 
-    def predictor(image, mask):
-      feed_dict={
-        self.graph.inputs.image: image,
-        self.graph.inputs.caption: original.caption,
-        self.graph.inputs.caption_length: original.caption_length,
-        self.graph.mask: mask,
-      }
-      values = self.graph.Narrow("model.pxhat").FlatCall(session.run, feed_dict=feed_dict)
-      return values.model.pxhat
+  xs = original.image
+  xhats, masks = sampler(xs, masks)
 
-    sample = sample_ancestral(predictor, mask, original, config=self.config)
-    for i, caption, x, xhat, logp in enumerate(util.equizip(
-        original.caption, original.image, sample.image, sample.logp)):
-      scipy.misc.imsave("%i_original.png" % i, x)
-      scipy.misc.imsave("%i_sample.png" % i, xhat)
-      open("%i_caption.txt" % i).write(caption)
-      np.savez_compressed("%i_logp.npz" % i, logp)
-
-def sample_ancestral(predictor, mask, original, config):
-  x = original.image.copy()
-  mask = mask.copy()
-  logp = np.zeros(x.shape, dtype=np.float32)
-
-  B, H, W, D = mask.shape
-
-  while not mask.all():
-    pxhat = predictor(image=x, mask=mask)
-    xhat = util.sample(pxhat, axis=4, temperature=config.temperature)
-
-    # choose variable to sample, by sampling according to the normalized mask. this is uniform as
-    # all masked out variables have equal positive weight.
-    selection = util.sample(mask.reshape([B, H * W * D]), axis=1, onehot=True).reshape(mask.shape)
-
-    x = np.where(selection, xhat, x)
-    mask = np.where(selection, 1., mask)
-    logp = np.where(selection,
-                    np.log(pxhat[np.arange(pxhat.shape[0])[:, None, None, None],
-                                 np.arange(pxhat.shape[1])[None, :, None, None],
-                                 np.arange(pxhat.shape[2])[None, None, :, None],
-                                 np.arange(pxhat.shape[3])[None, None, None, :],
-                                 xhat]),
-                    0.)
-
-  return original.With(image=x, logp=logp)
+  for i, (caption, x, xhat) in enumerate(util.equizip(
+      original.caption, xs, xhats)):
+    scipy.misc.imsave(os.path.join(config.output_dir, "%i_original.png" % i), x)
+    scipy.misc.imsave(os.path.join(config.output_dir, "%i_sample.png" % i), xhat)
+    with open(os.path.join(config.output_dir, "%i_caption.txt" % i), "w") as file:
+      file.write(caption)
 
 def make_graph(data, model, config, fold="valid"):
   h = H()
@@ -119,6 +90,133 @@ def make_graph(data, model, config, fold="valid"):
   h.model = model(image=h.inputs.image, mask=h.mask, caption=h.inputs.caption,
                   caption_length=h.inputs.caption_length)
   return h
+
+def uniform_selector(mask, pxhat):
+  # sample uniformly among masked-out variables
+  return util.sample((1 - mask).reshape([mask.shape[0], -1]),
+                     axis=1, onehot=True).reshape(mask.shape)
+
+def greedy_selector(mask, pxhat, sign=+1):
+  # choose variable with lowest entropy
+  entropies = -(pxhat * np.log(pxhat)).sum(axis=4)
+  return np.reshape(util.to_onehot(np.argmin(sign * entropies.reshape([mask.shape[0], -1]),
+                                             axis=1),
+                                   axis=1),
+                    mask.shape)
+
+def antigreedy_selector(mask, pxhat):
+  return greedy_selector(mask, pxhat, sign=-1)
+
+class BaseSampler(object):
+  pass
+
+class AncestralSampler(BaseSampler):
+  def __init__(self, predictor, selector, temperature=1.):
+    self.predictor = predictor
+    self.selector = selector
+    self.temperature = temperature
+
+  def __call__(self, x, mask):
+    x, mask = x.copy(), mask.copy()
+    logp = np.zeros(x.shape, dtype=np.float32)
+  
+    count = np.unique((1 - mask).sum(axis=(1,2,3)))
+    assert count.size == 1 # FIXME not if inside gibbs
+
+    i = 0
+    with progressbar.ProgressBar(maxval=count) as bar:
+      while not mask.all():
+        pxhat = self.predictor(x, mask)
+        xhat = util.sample(pxhat, axis=4, temperature=self.temperature)
+  
+        selection = self.selector(mask, pxhat)
+        assert selection.any(axis=(1, 2, 3)).all() # FIXME not if inside gibbs?
+
+        x = np.where(selection, xhat, x)
+        mask = np.where(selection, 1., mask)
+        logp = np.where(selection,
+                        np.log(pxhat[np.arange(pxhat.shape[0])[:, None, None, None],
+                                     np.arange(pxhat.shape[1])[None, :, None, None],
+                                     np.arange(pxhat.shape[2])[None, None, :, None],
+                                     np.arange(pxhat.shape[3])[None, None, None, :],
+                                     xhat]),
+                        logp)
+  
+        i += 1
+        bar.update(i)
+
+    return x, mask
+
+class IndependentSampler(BaseSampler):
+  def __init__(self, predictor, temperature=1.):
+    self.predictor = predictor
+    self.temperature = temperature
+
+  def __call__(self, x, mask):
+    x, mask = x.copy(), mask.copy()
+  
+    pxhat = self.predictor(x, mask)
+    xhat = util.sample(pxhat, axis=4, temperature=self.temperature)
+  
+    x = np.where(mask, x, xhat)
+    mask = np.ones_like(mask)
+    return x, mask
+
+class Gibbs(BaseSampler):
+  def __init__(self, sampler, num_steps=None):
+    self.sampler = sampler
+    self.num_steps = num_steps
+
+  def __call__(self, x, mask):
+    count = np.unique((1 - mask).sum(axis=(1,2,3)))
+    assert count.size == 1 # FIXME not if within gibbs
+  
+    num_steps = count if self.num_steps is None else self.num_steps
+  
+    with progressbar.ProgressBar(maxval=num_steps) as bar:
+      for _ in range(num_steps):
+        inner_mask = np.random.random(mask.shape) < 0.5
+        x = self.sampler(x, mask | inner_mask)
+        bar.update()
+  
+    return x, np.ones_like(mask)
+
+class ToplevelSampler(BaseSampler, util.Factory):
+  def __call__(self, x, mask):
+    return self.sampler(x, mask)
+
+class UniformAncestralSampler(ToplevelSampler):
+  key = "uniform_ancestral"
+
+  def __init__(self, config):
+    self.sampler = AncestralSampler(predictor=config.predictor,
+                                    selector=uniform_selector,
+                                    temperature=config.temperature)
+
+class GreedyAncestralSampler(ToplevelSampler):
+  key = "greedy_ancestral"
+
+  def __init__(self, config):
+    self.sampler = AncestralSampler(predictor=config.predictor,
+                                    selector=greedy_selector,
+                                    temperature=config.temperature)
+
+class AntigreedyAncestralSampler(ToplevelSampler):
+  key = "antigreedy_ancestral"
+
+  def __init__(self, config):
+    self.sampler = AncestralSampler(predictor=config.predictor,
+                                    selector=antigreedy_selector,
+                                    temperature=config.temperature)
+
+class IndependentGibbsSampler(ToplevelSampler):
+  key = "independent_gibbs"
+
+  def __init__(self, config):
+    self.sampler = GibbsSampler(predictor=config.predictor,
+                                sampler=IndependentSampler(predictor=predictor,
+                                                           temperature=config.temperature),
+                                num_steps=None)
 
 if __name__ == "__main__":
   tf.app.run()
