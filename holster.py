@@ -204,7 +204,7 @@ class BaseHolster(object):
   def AsDict(self):
     return ordict(self.Items())
 
-  def With(self, items, **kwargs):
+  def With(self, items=(), **kwargs):
     h = H(self)
     h.Update(items)
     h.Update(kwargs)
