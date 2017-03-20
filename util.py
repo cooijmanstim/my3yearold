@@ -67,14 +67,12 @@ def softmax(p, axis=None, temperature=1):
   return p
 
 def sample(p, axis=None, temperature=1, onehot=False):
+  assert (p >= 0).all() # just making sure we don't put log probabilities in here
+
   if axis is None:
     axis = p.ndim - 1
 
-  p = softmax(p, axis=axis, temperature=temperature)
-
-  # generate uniform random numbers on all axes except `axis`, scale them by the total mass
-  # according to cmf so it still works even if the probabilities don't quite sum to one. then do the
-  # roulette wheel thing to select a category.
+  p **= 1. / temperature
   cmf = p.cumsum(axis=axis)
   totalmasses = cmf[tuple(slice(None) if d != axis else slice(-1, None) for d in range(cmf.ndim))]
   u = np.random.random([p.shape[d] if d != axis else 1 for d in range(p.ndim)])
