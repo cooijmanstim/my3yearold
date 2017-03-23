@@ -65,7 +65,7 @@ def main(argv=()):
     return values.model.pxhat
 
   config.predictor = predictor
-  sampler = ToplevelSampler.make(FLAGS.strategy, config)
+  sampler = Strategy.make(FLAGS.strategy, config)
 
   masks = maskers.ContiguousMasker(H(image_size=64, size=32)).get_value(config.num_samples)
   original = next(data.get_batches(data.get_filenames("valid"),
@@ -162,30 +162,30 @@ class IndependentSampler(BaseSampler):
     mask = np.ones_like(mask)
     return x, mask
 
-class Gibbs(BaseSampler):
+class GibbsSampler(BaseSampler):
   def __init__(self, sampler, num_steps=None):
     self.sampler = sampler
     self.num_steps = num_steps
 
   def __call__(self, x, mask):
     count = np.unique((1 - mask).sum(axis=(1,2,3)))
-    assert count.size == 1 # FIXME not if within gibbs
+    assert count.size == 1 # FIXME not if gibbs within gibbs
   
     num_steps = count if self.num_steps is None else self.num_steps
   
     with progressbar.ProgressBar(maxval=num_steps) as bar:
-      for _ in range(num_steps):
+      for i in range(num_steps):
         inner_mask = np.random.random(mask.shape) < 0.5
-        x = self.sampler(x, mask | inner_mask)
-        bar.update()
-  
+        x, _ = self.sampler(x, np.logical_or(mask, inner_mask).astype(np.float32))
+        bar.update(i)
+
     return x, np.ones_like(mask)
 
-class ToplevelSampler(BaseSampler, util.Factory):
+class Strategy(util.Factory):
   def __call__(self, x, mask):
     return self.sampler(x, mask)
 
-class UniformAncestralSampler(ToplevelSampler):
+class UniformAncestralStrategy(Strategy):
   key = "uniform_ancestral"
 
   def __init__(self, config):
@@ -193,7 +193,7 @@ class UniformAncestralSampler(ToplevelSampler):
                                     selector=uniform_selector,
                                     temperature=config.temperature)
 
-class GreedyAncestralSampler(ToplevelSampler):
+class GreedyAncestralStrategy(Strategy):
   key = "greedy_ancestral"
 
   def __init__(self, config):
@@ -201,7 +201,7 @@ class GreedyAncestralSampler(ToplevelSampler):
                                     selector=greedy_selector,
                                     temperature=config.temperature)
 
-class AntigreedyAncestralSampler(ToplevelSampler):
+class AntigreedyAncestralStrategy(Strategy):
   key = "antigreedy_ancestral"
 
   def __init__(self, config):
@@ -209,12 +209,11 @@ class AntigreedyAncestralSampler(ToplevelSampler):
                                     selector=antigreedy_selector,
                                     temperature=config.temperature)
 
-class IndependentGibbsSampler(ToplevelSampler):
+class IndependentGibbsStrategy(Strategy):
   key = "independent_gibbs"
 
   def __init__(self, config):
-    self.sampler = GibbsSampler(predictor=config.predictor,
-                                sampler=IndependentSampler(predictor=predictor,
+    self.sampler = GibbsSampler(sampler=IndependentSampler(predictor=config.predictor,
                                                            temperature=config.temperature),
                                 num_steps=None)
 
