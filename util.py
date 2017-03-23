@@ -72,7 +72,8 @@ def sample(p, axis=None, temperature=1, onehot=False):
   if axis is None:
     axis = p.ndim - 1
 
-  p **= 1. / temperature
+  if temperature != 1:
+    p = p ** (1. / temperature)
   cmf = p.cumsum(axis=axis)
   totalmasses = cmf[tuple(slice(None) if d != axis else slice(-1, None) for d in range(cmf.ndim))]
   u = np.random.random([p.shape[d] if d != axis else 1 for d in range(p.ndim)])
