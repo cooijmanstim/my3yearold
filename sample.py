@@ -163,8 +163,9 @@ class IndependentSampler(BaseSampler):
     return x, mask
 
 class GibbsSampler(BaseSampler):
-  def __init__(self, sampler, num_steps=None):
+  def __init__(self, sampler, schedule, num_steps=None):
     self.sampler = sampler
+    self.schedule = schedule
     self.num_steps = num_steps
 
   def __call__(self, x, mask):
@@ -175,7 +176,8 @@ class GibbsSampler(BaseSampler):
   
     with progressbar.ProgressBar(maxval=num_steps) as bar:
       for i in range(num_steps):
-        inner_mask = np.random.random(mask.shape) < 0.5
+        pm = self.schedule(i, num_steps)
+        inner_mask = np.random.random(mask.shape) < pm
         x, _ = self.sampler(x, np.logical_or(mask, inner_mask).astype(np.float32))
         bar.update(i)
 
@@ -215,7 +217,12 @@ class IndependentGibbsStrategy(Strategy):
   def __init__(self, config):
     self.sampler = GibbsSampler(sampler=IndependentSampler(predictor=config.predictor,
                                                            temperature=config.temperature),
+                                schedule=yao_schedule,
                                 num_steps=None)
+
+def yao_schedule(i, n, pmax=0.9, pmin=0.1, alpha=0.7):
+  wat = (pmax - pmin) * i / n
+  return max(pmin, pmax - wat / alpha)
 
 if __name__ == "__main__":
   tf.app.run()
