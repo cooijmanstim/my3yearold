@@ -58,34 +58,15 @@ def project(x, depth, bias=True, scope=None):
     return y
 
 def conv_layer(x, radius=1, stride=1, padding="SAME", depth=None, fn=tf.nn.relu,
-               normalizer=util.DEFAULT, bias=True, separable=False, scope=None):
+               normalizer=util.DEFAULT, bias=True, scope=None):
   if normalizer is util.DEFAULT:
     normalizer = sensible_normalizer
 
   with tf.variable_scope(scope or "conv", []):
     input_depth = get_depth(x)
-
-    if separable:
-      assert False
-      # This does just what tf.nn.separable_conv2d would do but isn't impractically anal about
-      # input_depth * multiplier > depth. In particular, it allows input_depth > depth.
-      if radius > 1:
-        multiplier = max(1, depth // input_depth)
-        dw = tf.get_variable("dw", shape=[radius, radius, input_depth, multiplier],
-                             initializer=tf.uniform_unit_scaling_initializer())
-        z = tf.nn.depthwise_conv2d(x, dw, strides=[1, stride, stride, 1], padding=padding)
-        input_depth *= multiplier
-      else:
-        # 1x1 depthwise convolution would be redundant with the pointwise convolution below.
-        z = x
-      pw = tf.get_variable("pw", shape=[1, 1, input_depth, depth],
-                           initializer=tf.uniform_unit_scaling_initializer())
-      y = tf.nn.conv2d(z, pw, strides=[1, 1, 1, 1], padding="VALID")
-    else:
-      w = tf.get_variable("w", shape=[radius, radius, input_depth, depth],
-                          initializer=tf.uniform_unit_scaling_initializer())
-      y = tf.nn.conv2d(x, w, strides=[1, stride, stride, 1], padding=padding)
-
+    w = tf.get_variable("w", shape=[radius, radius, input_depth, depth],
+                        initializer=tf.uniform_unit_scaling_initializer())
+    y = tf.nn.conv2d(x, w, strides=[1, stride, stride, 1], padding=padding)
     if normalizer:
       y = normalizer(y)
     else:
