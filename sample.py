@@ -67,11 +67,19 @@ def main(argv=()):
   config.predictor = predictor
   sampler = Strategy.make(FLAGS.strategy, config)
 
-  masks = maskers.ContiguousMasker(H(image_size=64, size=32)).get_value(config.num_samples)
   original = next(data.get_batches(data.get_filenames("valid"),
                                    batch_size=config.num_samples, shuffle=False))
 
   xs = original.image
+  with bamboo.scope("original"):
+    masks = np.ones(xs.shape).astype(np.float32)
+    bamboo.log(x=xs, mask=masks)
+
+  masks = maskers.ContiguousMasker(H(image_size=64, size=32)).get_value(config.num_samples)
+  xs = masks * xs
+  with bamboo.scope("masked"):
+    bamboo.log(x=xs, mask=masks)
+
   xhats, masks = sampler(xs, masks)
 
   for i, (caption, x, xhat) in enumerate(util.equizip(
@@ -80,6 +88,18 @@ def main(argv=()):
     scipy.misc.imsave(os.path.join(config.output_dir, "%i_sample.png" % i), xhat)
     with open(os.path.join(config.output_dir, "%i_caption.txt" % i), "w") as file:
       file.write(caption)
+
+  bamboo.dump(os.path.join(config.output_dir, "log.npz"))
+
+
+def bamboo_scope(label, subsample_factor=None):
+  def decorator(fn):
+    def wrapped_fn(*args, **kwargs):
+      with bamboo.scope(label, subsample_factor=subsample_factor):
+        return fn(*args, **kwargs)
+    return wrapped_fn
+  return decorator
+
 
 def make_graph(data, model, config, fold="valid"):
   h = H()
@@ -116,34 +136,29 @@ class AncestralSampler(BaseSampler):
     self.selector = selector
     self.temperature = temperature
 
+  @bamboo_scope("ancestral")
   def __call__(self, x, mask):
     x, mask = x.copy(), mask.copy()
-    logp = np.zeros(x.shape, dtype=np.float32)
   
     count = np.unique((1 - mask).sum(axis=(1,2,3)))
     assert count.size == 1 # FIXME not if inside gibbs
 
-    i = 0
-    with progressbar.ProgressBar(maxval=count) as bar:
-      while not mask.all():
-        pxhat = self.predictor(x, mask)
-        xhat = util.sample(pxhat, axis=4, temperature=self.temperature)
-  
-        selection = self.selector(mask, pxhat)
-        assert selection.any(axis=(1, 2, 3)).all() # FIXME not if inside gibbs?
+    with bamboo.scope("sequence", subsample_factor=100):
+      with progressbar.ProgressBar(maxval=count) as bar:
+        i = 0
+        while not mask.all():
+          pxhat = self.predictor(x, mask)
+          xhat = util.sample(pxhat, axis=4, temperature=self.temperature)
 
-        x = np.where(selection, xhat, x)
-        mask = np.where(selection, 1., mask)
-        logp = np.where(selection,
-                        np.log(pxhat[np.arange(pxhat.shape[0])[:, None, None, None],
-                                     np.arange(pxhat.shape[1])[None, :, None, None],
-                                     np.arange(pxhat.shape[2])[None, None, :, None],
-                                     np.arange(pxhat.shape[3])[None, None, None, :],
-                                     xhat]),
-                        logp)
-  
-        i += 1
-        bar.update(i)
+          selection = self.selector(mask, pxhat)
+          assert selection.any(axis=(1, 2, 3)).all() # FIXME not if inside gibbs?
+
+          x = np.where(selection, xhat, x)
+          bamboo.log(x=x, mask=selection, pxhat=pxhat)
+          mask = np.where(selection, 1., mask)
+
+          i += 1
+          bar.update(i)
 
     return x, mask
 
@@ -152,6 +167,7 @@ class IndependentSampler(BaseSampler):
     self.predictor = predictor
     self.temperature = temperature
 
+  @bamboo_scope("independent")
   def __call__(self, x, mask):
     x, mask = x.copy(), mask.copy()
   
@@ -159,6 +175,7 @@ class IndependentSampler(BaseSampler):
     xhat = util.sample(pxhat, axis=4, temperature=self.temperature)
   
     x = np.where(mask, x, xhat)
+    bamboo.log(x=x, mask=mask, pxhat=pxhat)
     mask = np.ones_like(mask)
     return x, mask
 
@@ -168,18 +185,20 @@ class GibbsSampler(BaseSampler):
     self.schedule = schedule
     self.num_steps = num_steps
 
+  @bamboo_scope("gibbs")
   def __call__(self, x, mask):
     count = np.unique((1 - mask).sum(axis=(1,2,3)))
     assert count.size == 1 # FIXME not if gibbs within gibbs
   
     num_steps = count if self.num_steps is None else self.num_steps
   
-    with progressbar.ProgressBar(maxval=num_steps) as bar:
-      for i in range(num_steps):
-        pm = self.schedule(i, num_steps)
-        inner_mask = np.random.random(mask.shape) < pm
-        x, _ = self.sampler(x, np.logical_or(mask, inner_mask).astype(np.float32))
-        bar.update(i)
+    with bamboo.scope("sequence", subsample_factor=100):
+      with progressbar.ProgressBar(maxval=num_steps) as bar:
+        for i in range(num_steps):
+          pm = self.schedule(i, num_steps)
+          inner_mask = np.random.random(mask.shape) < pm
+          x, _ = self.sampler(x, np.logical_or(mask, inner_mask).astype(np.float32))
+          bar.update(i)
 
     return x, np.ones_like(mask)
 
@@ -223,6 +242,8 @@ class IndependentGibbsStrategy(Strategy):
 def yao_schedule(i, n, pmax=0.9, pmin=0.1, alpha=0.7):
   wat = (pmax - pmin) * i / n
   return max(pmin, pmax - wat / alpha)
+
+bamboo = util.Bamboo()
 
 if __name__ == "__main__":
   tf.app.run()
