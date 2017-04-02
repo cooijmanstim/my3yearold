@@ -33,7 +33,7 @@ def main(argv=()):
   print str(config.hp)
   config.label = util.make_label(config)
 
-  dirname = "sample_%s_%s" % (datetime.datetime.now().isoformat(), config.label)
+  dirname = "sample_%s_T%s" % (datetime.datetime.now().isoformat(), config.temperature)
   dirname = dirname[:255] # >:-(((((((((((((((((((((((((((((((((((((((((
   config.output_dir = dirname
 
