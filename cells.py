@@ -57,7 +57,7 @@ class LSTM(BaseCell):
       c, h = state
       total_input = tfutil.project_terms([h] + inputs,
                                          depth=4 * self.num_units,
-                                         normalize=self.normalize,
+                                         normalize=util.DEFAULT if self.normalize else None,
                                          scope="ijfo")
       i, j, f, o = tf.split(total_input, 4, axis=1)
       f += self.forget_bias
@@ -65,7 +65,7 @@ class LSTM(BaseCell):
       new_c = tf.nn.sigmoid(f) * c + tf.nn.sigmoid(i) * self.activation(j)
       output_c = new_c
       if self.normalize:
-        output_c = tfutil.batch_normalize(output_c, scope="c")
+        output_c = tfutil.normalize(output_c, scope="c")
       new_h = tf.nn.sigmoid(o) * self.activation(output_c)
       new_c = output_c
     return [new_c, new_h]
@@ -96,13 +96,13 @@ class QRNN(BaseCell):
       c, h = state
       input, = inputs
       if self.normalize:
-        input = tfutil.batch_normalize(input, scope="jfo")
+        input = tfutil.normalize(input, scope="jfo")
       f, o, j = tf.split(input, 3, axis=1)
       f += self.forget_bias
       new_c = tf.nn.sigmoid(f) * c + (1 - tf.nn.sigmoid(f)) * self.activation(j)
       output_c = new_c
       if self.normalize:
-        output_c = tfutil.batch_normalize(output_c, scope="c")
+        output_c = tfutil.normalize(output_c, scope="c")
       new_h = tf.nn.sigmoid(o) * self.activation(output_c)
       new_h += 0 * h # to avoid None gradient on initial state
       new_c = output_c

@@ -1,6 +1,8 @@
 import numpy as np
 import os, contextlib
 
+DEFAULT = object()
+
 def batches(xs, batch_size=1, shuffle=False):
   xs = list(xs)
   if shuffle:
