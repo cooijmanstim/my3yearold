@@ -43,19 +43,56 @@ def main(argv=()):
   with tf.name_scope("valid"):
     evaluator = Evaluator(data, model, config)
 
+  earlystopper = EarlyStopper(config)
   supervisor = tf.train.Supervisor(logdir=config.output_dir, summary_op=None)
   with supervisor.managed_session() as session:
-    while not supervisor.should_stop():
+    while True:
+      global_step = tf.train.global_step(session, config.global_step)
+
+      if supervisor.should_stop():
+        print "supervisor says should stop"
+        break
+      if earlystopper.should_stop(global_step):
+        print "earlystopper says should stop"
+        break
+
       trainer(session, supervisor)
-      if tf.train.global_step(session, config.global_step) % 100 == 0:
-        # TODO keep best
+
+      if global_step % config.hp.validate.interval == 0:
         values = evaluator(session, supervisor)
         print "%5i loss:%10f loss asked:%10f loss given:%10f" % (
-          tf.train.global_step(session, config.global_step),
-          values.model.loss, values.model.loss_asked, values.model.loss_given)
-      if tf.train.global_step(session, config.global_step) >= config.hp.num_steps:
+          global_step, values.model.loss, values.model.loss_asked, values.model.loss_given)
+        earlystopper(global_step, values.model.loss, lambda: session.run(trainer.graph.lr_decay_op))
+
+      if global_step >= config.hp.num_steps:
+        print "hp.num_steps reached"
         break
-    print "should stop"
+
+class EarlyStopper(object):
+  def __init__(self, config):
+    self.config = config
+    self.best_loss = None
+    self.reset_time = 0
+    self.stale_time = 0
+    self.saver = tf.train.Saver()
+
+  def __call__(self, step, loss, decayer):
+    if self.best_loss is None or loss < self.best_loss:
+      self.best_loss = loss
+      # don't save too often if we're steadily improving
+      if step - self.stale_time > self.config.hp.validate.interval:
+        self.saver.save(session,
+                        os.path.join(self.config.output_dir,
+                                     "best_%i_%s.ckpt" % (step, loss)),
+                        global_step=self.config.global_step)
+      self.reset_time = step
+      self.stale_time = step
+    elif step - self.reset_time > self.config.hp.lr.patience:
+      decayer()
+      self.reset_time = step
+
+  def should_stop(self, step):
+    return step - self.stale_time > 2 * self.config.hp.lr.patience
 
 class Trainer(object):
   def __init__(self, data, model, config):
@@ -120,10 +157,9 @@ def make_graph(data, model, config, fold="valid"):
                   caption=h.inputs.caption, caption_length=h.inputs.caption_length)
 
   if D.train:
-    h.lr = tf.train.exponential_decay(
-      config.hp.lr.init, h.global_step, config.hp.lr.decay.interval,
-      config.hp.lr.decay.factor, staircase=True)
+    h.lr = tf.Variable(config.hp.lr.init, name="learning_rate", trainable=False, dtype=tf.float32)
     tf.summary.scalar("learning_rate", h.lr)
+    h.lr_decay_op = tf.assign(h.lr, config.hp.lr.decay * h.lr)
 
     h.loss = h.model.loss
     h.parameters = tf.trainable_variables()
@@ -171,8 +207,9 @@ def prepare_run_directory(config):
     tf.gfile.MakeDirs(config.output_dir)
   if not config.resume:
     with open(os.path.join(config.output_dir, "hp.conf"), "w") as f:
-      f.write(serialize_hp(config.hp, outer_separator="\n"))
+      f.write(util.serialize_hp(config.hp, outer_separator="\n"))
     shutil.copytree(os.path.dirname(os.path.realpath(__file__)),
                     os.path.join(config.output_dir, "code"))
+
 if __name__ == "__main__":
   tf.app.run()
