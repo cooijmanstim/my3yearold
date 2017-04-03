@@ -8,7 +8,7 @@ from holster import H
 from dynamite import D
 
 FLAGS = tf.flags.FLAGS
-tf.flags.DEFINE_string("checkpoint", None, "path to directory containing ckpt")
+tf.flags.DEFINE_string("checkpoint", None, "path to ckpt")
 tf.flags.DEFINE_string("strategy", "", "sampling strategy (e.g. UniformAncestralSampler)")
 tf.flags.DEFINE_string("basename", "", "base name for run")
 tf.flags.DEFINE_integer("num_samples", 20, "number of samples to generate")

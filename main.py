@@ -6,7 +6,7 @@ from holster import H
 from dynamite import D
 
 FLAGS = tf.flags.FLAGS
-tf.flags.DEFINE_string("base_output_dir", "/Tmp/cooijmat/gan", "root directory under which runs will be stored")
+tf.flags.DEFINE_string("base_output_dir", ".", "root directory under which runs will be stored")
 tf.flags.DEFINE_string("basename", "", "base name for run")
 tf.flags.DEFINE_string("hp", "", "hyperparameter string")
 tf.flags.DEFINE_bool("resume", False, "resume training from previous checkpoint")
