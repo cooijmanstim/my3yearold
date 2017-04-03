@@ -50,7 +50,6 @@ class ConvReader(Reader):
     h.input_length = length
     w = tf.get_variable("w", shape=[hp.radius, h.input.shape[-1], hp.size],
                         initializer=tf.uniform_unit_scaling_initializer())
-    w = tfutil.maybe_bound_weights(w)
     h.output = tf.nn.conv1d(h.input, w, stride=1, padding="VALID")
     h.output_length = h.input_length - (hp.radius - 1)
     # summarize by global average pooling
