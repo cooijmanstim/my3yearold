@@ -29,7 +29,7 @@ def layer(xs, fn=tf.nn.relu, **project_terms_kwargs):
 
 def project_terms(xs, depth=None, normalizer=util.DEFAULT, bias=True, scope=None):
   if normalizer is util.DEFAULT:
-    normalizer = sensible_normalizer
+    normalizer = normalize
 
   xs = list(xs)
   with tf.variable_scope(scope or "project_terms", values=xs):
@@ -60,7 +60,7 @@ def project(x, depth, bias=True, scope=None):
 def conv_layer(x, radius=1, stride=1, padding="SAME", depth=None, fn=tf.nn.relu,
                normalizer=util.DEFAULT, bias=True, scope=None):
   if normalizer is util.DEFAULT:
-    normalizer = sensible_normalizer
+    normalizer = normalize
 
   with tf.variable_scope(scope or "conv", []):
     input_depth = get_depth(x)
@@ -107,52 +107,50 @@ def meanlogabs(x):
 
 softmax_xent = tf.nn.softmax_cross_entropy_with_logits # geez
 
-def normalize(x, beta=None, gamma=None, epsilon=1e-5, scope=None, statfn=util.DEFAULT):
-  if statfn is util.DEFAULT:
-    statfn = sensible_statistics
-  if not statfn:
-    return x
+def normalize(x, *args, **kwargs):
+  if x.shape.ndims == 2:
+    return layer_normalize(x, *args, **kwargs)
+  elif x.shape.ndims == 4:
+    kwargs.setdefault("axes", [0, 1, 2])
+    return batch_normalize(x, *args, **kwargs)
+  else:
+    raise ValueError()
 
-  with tf.variable_scope(scope or "norm"):
-    mean, variance = statfn(x)
+def layer_normalize(x, beta=None, gamma=None, epsilon=1e-5, scope=None, axes=-1):
+  with tf.variable_scope(scope or "ln"):
+    axes = [axes] if isinstance(axes, numbers.Integral) else axes
+    mean, variance = tf.nn.moments(x, axes=axes, keep_dims=True)
+    if gamma is None:
+      gamma = tf.get_variable("gamma", shape=x.get_shape()[-1:], initializer=tf.constant_initializer(0.1))
+    if beta is None:
+      beta = tf.get_variable("beta", shape=x.get_shape()[-1:], initializer=tf.constant_initializer(0))
+    return tf.nn.batch_normalization(x, mean, variance, beta, gamma, variance_epsilon=epsilon)
+
+def batch_normalize(x, beta=None, gamma=None, epsilon=1e-5, scope=None, axes=0):
+  with tf.variable_scope(scope or "bn"):
+    axes = [axes] if isinstance(axes, numbers.Integral) else axes
+    batchmean, batchvariance = tf.nn.moments(x, axes=axes, keep_dims=True)
+
+    popmean = tf.get_variable("popmean", shape=batchmean.shape, trainable=False,
+                              collections=[tf.GraphKeys.MODEL_VARIABLES, tf.GraphKeys.GLOBAL_VARIABLES],
+                              initializer=tf.constant_initializer(0.0))
+    popvariance = tf.get_variable("popvariance", shape=batchvariance.shape, trainable=False,
+                                  collections=[tf.GraphKeys.MODEL_VARIABLES, tf.GraphKeys.GLOBAL_VARIABLES],
+                                  initializer=tf.constant_initializer(1.0))
+
+    if D.train:
+      decay = 0.05
+      mean, variance = batchmean, batchvariance
+      updates = [popmean.assign_sub(decay * (popmean - mean)),
+                 popvariance.assign_sub(decay * (popvariance - variance))]
+      # make update happen when mean/variance are used
+      with tf.control_dependencies(updates):
+        mean, variance = tf.identity(mean), tf.identity(variance)
+    else:
+      mean, variance = tf.convert_to_tensor(popmean), tf.convert_to_tensor(popvariance)
+
     if gamma is None:
       gamma = tf.get_variable("gamma", shape=variance.shape, initializer=tf.constant_initializer(0.1))
     if beta is None:
       beta = tf.get_variable("beta", shape=mean.shape, initializer=tf.constant_initializer(0))
     return tf.nn.batch_normalization(x, mean, variance, beta, gamma, variance_epsilon=epsilon)
-
-def batchnorm_statistics(x, axes=0):
-  batchmean, batchvariance = tf.nn.moments(x, axes=axes)
-
-  popmean = tf.get_variable("popmean", shape=batchmean.shape, trainable=False,
-                            collections=[tf.GraphKeys.MODEL_VARIABLES, tf.GraphKeys.GLOBAL_VARIABLES],
-                            initializer=tf.constant_initializer(0.0))
-  popvariance = tf.get_variable("popvariance", shape=batchvariance.shape, trainable=False,
-                                collections=[tf.GraphKeys.MODEL_VARIABLES, tf.GraphKeys.GLOBAL_VARIABLES],
-                                initializer=tf.constant_initializer(1.0))
-
-  if D.train:
-    decay = 0.05
-    mean, variance = batchmean, batchvariance
-    updates = [popmean.assign_sub(decay * (popmean - mean)),
-               popvariance.assign_sub(decay * (popvariance - variance))]
-    # make update happen when mean/variance are used
-    with tf.control_dependencies(updates):
-      mean, variance = tf.identity(mean), tf.identity(variance)
-  else:
-    mean, variance = popmean, popvariance
-
-  return mean, variance
-
-def layernorm_statistics(x, axes=-1):
-  return tf.nn.moments(x, axes=axes)
-
-def convnorm_statistics(x, axes=[0, 1, 2]):
-  return batchnorm_statistics(x, axes=axes)
-
-def sensible_statistics(x):
-  return {2: layernorm_statistics, 4: convnorm_statistics}[x.shape.ndims](x)
-
-def sensible_normalizer(*args, **kwargs):
-  kwargs["statfn"] = sensible_statistics
-  return normalize(*args, **kwargs)
