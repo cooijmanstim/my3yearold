@@ -39,13 +39,11 @@ def main(argv=()):
   config.masker = maskers.make(config.hp.masker.kind, hp=config.hp.masker)
 
   config.global_step = tf.Variable(0, name="global_step", trainable=False)
-  with tf.name_scope("train"):
-    trainer = Trainer(data, model, config)
+  trainer = Trainer(data, model, config)
   tf.get_variable_scope().reuse_variables()
-  with tf.name_scope("valid"):
-    evaluator = Evaluator(data, model, config)
+  evaluator = Evaluator(data, model, config)
 
-  earlystopper = EarlyStopper(config)
+  earlystopper = EarlyStopper(config, trainer.graph.lr_decay_op)
   supervisor = tf.train.Supervisor(logdir=config.output_dir, summary_op=None)
   with supervisor.managed_session() as session:
     while True:
@@ -59,28 +57,34 @@ def main(argv=()):
         break
 
       trainer(session, supervisor)
+      sys.stdout.write("\r%i " % global_step)
+      sys.stdout.flush()
 
       if global_step % config.hp.validate.interval == 0:
         values = evaluator(session, supervisor)
         print "%5i loss:%10f loss asked:%10f loss given:%10f" % (
           global_step, values.model.loss, values.model.loss_asked, values.model.loss_given)
-        earlystopper(global_step, values.model.loss, lambda: session.run(trainer.graph.lr_decay_op))
+        earlystopper.track(global_step, values.model.loss, session)
 
       if global_step >= config.hp.num_steps:
         print "hp.num_steps reached"
         break
 
 class EarlyStopper(object):
-  def __init__(self, config):
+  def __init__(self, config, decay_op):
     self.config = config
+    self.decay_op = decay_op
     self.best_loss = None
     self.reset_time = 0
     self.stale_time = 0
     self.saver = tf.train.Saver()
+    # validation estimate is noisy, so filter it
+    self.filter = util.MovingMedianFilter(10)
 
-  def __call__(self, step, loss, decayer):
-    if self.best_loss is None or loss < self.best_loss:
-      self.best_loss = loss
+  def track(self, step, loss, session):
+    filtered_loss = self.filter(loss)
+    if self.best_loss is None or filtered_loss < self.best_loss:
+      self.best_loss = filtered_loss
       # don't save too often if we're steadily improving
       if step - self.stale_time > self.config.hp.validate.interval:
         self.saver.save(session,
@@ -90,10 +94,11 @@ class EarlyStopper(object):
       self.reset_time = step
       self.stale_time = step
     elif step - self.reset_time > self.config.hp.lr.patience:
-      decayer()
+      session.run(self.decay_op)
       self.reset_time = step
 
   def should_stop(self, step):
+    return False # this is finicky and we don't really care
     return step - self.stale_time > 2 * self.config.hp.lr.patience
 
 class Trainer(object):
@@ -101,24 +106,28 @@ class Trainer(object):
     self.data = data
     self.config = config
     self.model = model
-    self.graph = make_training_graph(data, model, config, fold="train")
-
-    self.summaries = []
-    self.summaries.extend(self.graph.summaries)
-    for parameter, gradient in util.equizip(self.graph.parameters, self.graph.gradients):
-      self.summaries.append(
-        tf.summary.scalar("gradmla_%s" %
-                          parameter.name.replace(":", "_"),
-                          tfutil.meanlogabs(gradient)))
-    for parameter in tf.trainable_variables():
-      self.summaries.append(
-        tf.summary.scalar("mla_%s" % parameter.name.replace(":", "_"),
-                          tfutil.meanlogabs(parameter)))
-    self.graph.summary_op = tf.summary.merge(self.summaries)
+    self.graph = self.make_graph()
 
     self.feed_dicts = it.chain.from_iterable(
       self.data.get_feed_dicts(self.graph.inputs, "train", batch_size=self.config.hp.batch_size, shuffle=True)
       for _ in it.count(0))
+
+  def make_graph(self):
+    with tf.name_scope("train"):
+      graph = make_training_graph(self.data, self.model, self.config, fold="train")
+    summaries = [var for var in tf.get_collection(tf.GraphKeys.SUMMARIES)
+                      if var.name.startswith("train")]
+    for parameter, gradient in util.equizip(graph.parameters, graph.gradients):
+      summaries.append(
+        tf.summary.scalar("gradmla_%s" %
+                          parameter.name.replace(":", "_"),
+                          tfutil.meanlogabs(gradient)))
+    for parameter in tf.trainable_variables():
+      summaries.append(
+        tf.summary.scalar("mla_%s" % parameter.name.replace(":", "_"),
+                          tfutil.meanlogabs(parameter)))
+    graph.summary_op = tf.summary.merge(summaries)
+    return graph
 
   def __call__(self, session, supervisor):
     def tracing_run(*args, **kwargs):
@@ -148,19 +157,41 @@ class Evaluator(object):
     self.data = data
     self.config = config
     self.model = model
-    self.graph = make_evaluation_graph(data, model, config, fold="valid")
+    self.graph = self.make_graph()
 
-    self.summaries = list(self.graph.summaries)
-    self.graph.summary_op = tf.summary.merge(self.summaries)
+  def make_graph(self):
+    with tf.name_scope("valid"):
+      graph = make_evaluation_graph(self.data, self.model, self.config, fold="valid")
+    summaries = [var for var in tf.get_collection(tf.GraphKeys.SUMMARIES)
+                 if var.name.startswith("valid")]
+    graph.summary_op = tf.summary.merge(summaries)
+    return graph
 
   def __call__(self, session, supervisor):
-    # validate on one batch
+    aggregates = H({"model.loss": util.MeanAggregate(),
+                    "model.loss_given": util.MeanAggregate(),
+                    "model.loss_asked": util.MeanAggregate(),
+                    "summary_op": util.LastAggregate()})
     batch_size = 10 * self.config.hp.batch_size
-    feed_dict = dict(next(self.data.get_feed_dicts(self.graph.inputs, "valid", batch_size=batch_size, shuffle=False)))
-    feed_dict.update(self.config.masker.get_feed_dict(batch_size))
-    values = self.graph.Narrow("model.loss model.loss_given model.loss_asked summary_op").FlatCall(
-      session.run, feed_dict=feed_dict)
+    # spend at most 1/16 of the time validating
+    max_num_batches = self.config.hp.validate.interval // 16
+
+    for _, feed_dict in zip(range(max_num_batches),
+                         self.data.get_feed_dicts(self.graph.inputs, "valid", batch_size=batch_size, shuffle=False)):
+      feed_dict = dict(feed_dict)
+      feed_dict.update(self.config.masker.get_feed_dict(batch_size))
+      values = self.graph.Narrow("model.loss model.loss_given model.loss_asked summary_op").FlatCall(
+        session.run, feed_dict=feed_dict)
+      for aggregate, value in aggregates.Zip(values):
+        aggregate(value)
+
+    values = H((key, aggregate.value) for key, aggregate in aggregates.Items())
     supervisor.summary_computed(session, values.summary_op)
+    for key, value in values.Items():
+      # summary_ops return strings?? the plot thickens -__-
+      if not isinstance(value, basestring):
+        value = tf.Summary(value=[tf.Summary.Value(tag="valid_%s" % key, simple_value=value)])
+      supervisor.summary_computed(session, value)
     return values
 
 def make_graph(data, model, config, fold="valid"):
@@ -185,21 +216,19 @@ def make_graph(data, model, config, fold="valid"):
       global_step=h.global_step)
 
   h.summaries = []
-  h.summaries.extend(
-    tf.summary.scalar(k, v)
-    for k, v in h.Narrow("model.loss model.loss_given model.loss_asked").Items())
 
-  if not D.train:
-    h.summaries.extend([
-      tf.summary.image("real", h.model.x, max_outputs=3),
-      tf.summary.image("fake", h.model.xhat, max_outputs=3),
-      tf.summary.image("realfake", tf.cast(h.mask * tf.cast(h.model.x, tf.float32) +
-                                           (1 - h.mask) * tf.cast(h.model.xhat, tf.float32),
-                                           tf.uint8),
-                       max_outputs=3),
-      tf.summary.image("mask", h.mask, max_outputs=3),
-      tf.summary.image("entropies", h.model.entropies, max_outputs=3),
-    ])
+  if D.train:
+    for k, v in h.Narrow("model.loss model.loss_given model.loss_asked").Items():
+      tf.summary.scalar(k, v)
+  else:
+    tf.summary.image("real", h.model.x, max_outputs=3)
+    tf.summary.image("fake", h.model.xhat, max_outputs=3)
+    tf.summary.image("realfake", tf.cast(h.mask * tf.cast(h.model.x, tf.float32) +
+                                         (1 - h.mask) * tf.cast(h.model.xhat, tf.float32),
+                                         tf.uint8),
+                     max_outputs=3)
+    tf.summary.image("mask", h.mask, max_outputs=3)
+    tf.summary.image("entropies", h.model.entropies, max_outputs=3)
 
   return h
 

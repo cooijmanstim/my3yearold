@@ -1,5 +1,6 @@
-import numpy as np
 import os, contextlib
+from collections import deque
+import numpy as np
 
 DEFAULT = object()
 
@@ -165,3 +166,47 @@ class BambooScope(object):
     else:
       self.items[-1] = item
     self.i += 1
+
+class MeanAggregate(object):
+  def __init__(self):
+    self.n = 0
+    self.v = 0.
+
+  def __call__(self, x):
+    self.n += 1
+    self.v = self.v + (x - self.v) / self.n
+
+  @property
+  def value(self):
+    return self.v
+
+class LastAggregate(object):
+  def __init__(self):
+    self.v = None
+
+  def __call__(self, x):
+    self.v = x
+
+  @property
+  def value(self):
+    return self.v
+
+class MovingMedianAggregate(object):
+  def __init__(self, dt=10):
+    self.dt = dt
+    self.xs = deque([], dt)
+
+  def __call__(self, x):
+    self.xs.append(x)
+
+  @property
+  def value(self):
+    return np.median(self.xs)
+
+class MovingMedianFilter(object):
+  def __init__(self, dt=None):
+    self.median = MovingMedianAggregate(dt)
+
+  def __call__(self, x):
+    self.median(x)
+    return self.median.value
