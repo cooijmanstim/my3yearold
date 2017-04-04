@@ -84,6 +84,19 @@ class QuasiReader(CompositeReader):
                 ("rnn", RecurrentReader(H(bidir=hp.bidir, cell=H(kind="quasi", size=hp.size, normalize=hp.normalize))))]
     super(QuasiReader, self).__init__(hp, children=children)
 
+class StraightResidualConvnet(Convnet):
+  key = "straight_residual"
+
+  def __init__(self, hp):
+    self.hp = hp
+
+  def __call__(self, x, cb):
+    hp = self.hp
+    for i in range(0, hp.profundity, 2):
+      x = tfutil.residual_block(x, depth=hp.depth, radius=hp.radius, scope="res%i" % i)
+      x = cb(i, x)
+    return H(output=x)
+
 class StraightConvnet(Convnet):
   key = "straight"
 
@@ -93,7 +106,7 @@ class StraightConvnet(Convnet):
   def __call__(self, x, cb):
     hp = self.hp
     for i in range(hp.profundity):
-      x = tfutil.residual_block(x, depth=hp.depth, radius=hp.radius, scope="res%i" % i)
+      x = tfutil.conv_layer(x, depth=hp.depth, radius=hp.radius, scope="conv%i" % i)
       x = cb(i, x)
     return H(output=x)
 
