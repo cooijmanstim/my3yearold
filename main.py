@@ -10,6 +10,7 @@ tf.flags.DEFINE_string("base_output_dir", ".", "root directory under which runs 
 tf.flags.DEFINE_string("basename", "", "base name for run")
 tf.flags.DEFINE_string("hp", "", "hyperparameter string")
 tf.flags.DEFINE_bool("resume", False, "resume training from previous checkpoint")
+tf.flags.DEFINE_float("trace_fraction", 0.01, "how often to trace graph execution and dump timeline")
 
 def main(argv=()):
   assert not argv[1:]
@@ -17,7 +18,8 @@ def main(argv=()):
   config = H(data_dir="/Tmp/cooijmat/mscoco",
              base_output_dir=FLAGS.base_output_dir,
              basename=FLAGS.basename,
-             resume=FLAGS.resume)
+             resume=FLAGS.resume,
+             trace_fraction=FLAGS.trace_fraction)
   config.hp = H(util.parse_hp(FLAGS.hp))
   print str(config.hp)
   config.label = util.make_label(config)
@@ -119,10 +121,23 @@ class Trainer(object):
       for _ in it.count(0))
 
   def __call__(self, session, supervisor):
+    def tracing_run(*args, **kwargs):
+      run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+      run_metadata = tf.RunMetadata()
+      result = session.run(*args, options=run_options, run_metadata=run_metadata, **kwargs)
+      from tensorflow.python.client import timeline
+      tl = timeline.Timeline(run_metadata.step_stats)
+      with open(os.path.join(self.config.output_dir, 'timeline.json'), 'w') as f:
+        f.write(tl.generate_chrome_trace_format())
+      print "trace written"
+      return result
+
     feed_dict = dict(next(self.feed_dicts))
     feed_dict.update(self.config.masker.get_feed_dict(self.config.hp.batch_size))
-    values = self.graph.Narrow("model.loss train_op summary_op").FlatCall(
-      session.run, feed_dict=feed_dict)
+
+    runner = tracing_run if np.random.rand() < self.config.trace_fraction else session.run
+    values = self.graph.Narrow("model.loss train_op summary_op").FlatCall(runner, feed_dict=feed_dict)
+
     supervisor.summary_computed(session, values.summary_op)
     if np.isnan(values.model.loss):
       raise ValueError("nan encountered")
