@@ -139,7 +139,7 @@ def batch_normalize(x, beta=None, gamma=None, epsilon=1e-5, scope=None, axes=0):
                                   initializer=tf.constant_initializer(1.0))
 
     if D.train:
-      decay = 0.05
+      decay = 0.1
       mean, variance = batchmean, batchvariance
       updates = [popmean.assign_sub(decay * (popmean - mean)),
                  popvariance.assign_sub(decay * (popvariance - variance))]
