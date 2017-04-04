@@ -190,7 +190,7 @@ class Evaluator(object):
     for key, value in values.Items():
       # summary_ops return strings?? the plot thickens -__-
       if not isinstance(value, basestring):
-        value = tf.Summary(value=[tf.Summary.Value(tag="valid_%s" % key, simple_value=value)])
+        value = tf.Summary(value=[tf.Summary.Value(tag="valid/%s" % key, simple_value=value)])
       supervisor.summary_computed(session, value)
     return values
 
