@@ -1,3 +1,4 @@
+from __future__ import division
 import numpy as np, tensorflow as tf
 import util, tfutil, cells
 from holster import H
@@ -90,11 +91,11 @@ class StraightResidualConvnet(Convnet):
   def __init__(self, hp):
     self.hp = hp
 
-  def __call__(self, x, cb):
+  def __call__(self, x, merger, mergee):
     hp = self.hp
     for i in range(0, hp.profundity, 2):
       x = tfutil.residual_block(x, depth=hp.depth, radius=hp.radius, scope="res%i" % i)
-      x = cb(i, x)
+      x = merger(i, x, mergee)
     return H(output=x)
 
 class StraightConvnet(Convnet):
@@ -103,11 +104,51 @@ class StraightConvnet(Convnet):
   def __init__(self, hp):
     self.hp = hp
 
-  def __call__(self, x, cb):
+  def __call__(self, x, merger, mergee):
     hp = self.hp
     for i in range(hp.profundity):
       x = tfutil.conv_layer(x, depth=hp.depth, radius=hp.radius, scope="conv%i" % i)
-      x = cb(i, x)
+      x = merger(i, x, mergee)
+    return H(output=x)
+
+class StraightDilatedConvnet(Convnet):
+  key = "straight_dilated"
+
+  def __init__(self, hp):
+    self.hp = hp
+
+  def __call__(self, x, merger, mergee):
+    hp = self.hp
+
+    # try to do the right thing
+    h, w = x.get_shape().as_list()[1], x.get_shape().as_list()[2]
+    assert h == w
+    ndilations = int(round(np.log2(h)))
+    dilation_interval = int(round(hp.profundity / ndilations))
+
+    dilation = 1
+
+    def batch_to_space(x):
+      if dilation == 1: return x
+      return tf.batch_to_space_nd(x, [dilation, dilation], tf.zeros([2, 2], dtype=tf.int32))
+
+    def space_to_batch(x):
+      if dilation == 1: return x
+      return tf.space_to_batch_nd(x, [dilation, dilation], tf.zeros([2, 2], dtype=tf.int32))
+  
+    for i in range(hp.profundity):
+      if i != 0 and i % dilation_interval == 0:
+        x = batch_to_space(x)
+        dilation *= 2
+        x = space_to_batch(x)
+
+      x = tfutil.conv_layer(x, depth=hp.depth, radius=hp.radius, scope="conv%i" % i)
+      if merger.should_merge(i):
+        x = batch_to_space(x)
+        x = merger(i, x, mergee)
+        x = space_to_batch(x)
+
+    x = batch_to_space(x)
     return H(output=x)
 
 class Merger(util.Factory):
@@ -117,27 +158,27 @@ class Merger(util.Factory):
   def should_merge(self, i):
     return i in map(int, self.hp.layers.split(","))
 
-  def __call__(self, i, x, reader):
+  def __call__(self, i, x, caption):
     if not self.should_merge(i):
       return x
     with tf.variable_scope("merger%i" % i):
-      return self.merge(x, reader)
+      return self.merge(x, caption)
 
 class ConvMerger(Merger):
   key = "conv"
 
-  def merge(self, x, reader):
-    z = reader.summary
+  def merge(self, x, caption):
+    z = caption.summary
     z = tfutil.toconv(z, height=x.shape[1], width=x.shape[2], depth=self.hp.depth)
     return tf.stack([x, z], axis=3)
 
 class AttentionMerger(Merger):
   key = "attention"
 
-  def merge(self, x, reader):
+  def merge(self, x, caption):
     depth = tfutil.get_depth(x)
-    z = tf.reshape(tfutil.layer([tfutil.collapse(reader.output, [[0, 1], 2])], depth=depth),
-                   [tf.shape(reader.output)[0], tf.shape(reader.output)[1], depth])
+    z = tf.reshape(tfutil.layer([tfutil.collapse(caption.output, [[0, 1], 2])], depth=depth),
+                   [tf.shape(caption.output)[0], tf.shape(caption.output)[1], depth])
     # attention weights by inner product
     u = tf.get_variable("u", initializer=tf.constant(np.eye(depth).astype(np.float32)))
     w = tf.einsum("bhwi,ij,btj->bhwt", x, u, z)
@@ -170,7 +211,7 @@ class Model(object):
                            h.mask], axis=3)
 
     with tf.variable_scope("convnet") as scope:
-      h.convnet = self.convnet(h.context, lambda i, x: self.merger(i, x, h.reader))
+      h.convnet = self.convnet(h.context, self.merger, h.reader)
 
     h.exhat = tf.reshape(
       tfutil.conv_layer(h.convnet.output, radius=1, depth=3 * hp.image.levels,
