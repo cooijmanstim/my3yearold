@@ -224,7 +224,7 @@ def make_graph(data, model, config, fold="valid"):
   else:
     tf.summary.image("real", h.model.x, max_outputs=3)
     tf.summary.image("fake", h.model.xhat, max_outputs=3)
-    tf.summary.image("fake_asked", tf.cast(h.mask * tf.cast(h.model.xhat, tf.float32), tf.uint8),
+    tf.summary.image("fake_asked", tf.cast((1 - h.mask) * tf.cast(h.model.xhat, tf.float32), tf.uint8),
                      max_outputs=3)
     tf.summary.image("realfake", tf.cast(h.mask * tf.cast(h.model.x, tf.float32) +
                                          (1 - h.mask) * tf.cast(h.model.xhat, tf.float32),
