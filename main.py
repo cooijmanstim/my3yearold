@@ -78,7 +78,7 @@ class EarlyStopper(object):
     self.best_loss = None
     self.reset_time = 0
     self.stale_time = 0
-    self.saver = tf.train.Saver()
+    self.saver = tf.train.Saver(max_to_keep=1)
     # validation estimate is noisy, so filter it
     self.filter = util.MovingMedianFilter(10)
 
