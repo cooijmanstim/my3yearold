@@ -10,18 +10,26 @@ tf.flags.DEFINE_string("data_dir", "/Tmp/cooijmat/mscoco", "directory to place l
 tf.flags.DEFINE_string("base_output_dir", ".", "root directory under which runs will be stored")
 tf.flags.DEFINE_string("basename", "", "base name for run")
 tf.flags.DEFINE_string("hp", "", "hyperparameter string")
+tf.flags.DEFINE_string("hpfile", "", "hyperparameter file")
 tf.flags.DEFINE_bool("resume", False, "resume training from previous checkpoint")
 tf.flags.DEFINE_float("trace_fraction", 0.001, "how often to trace graph execution and dump timeline")
 
 def main(argv=()):
-  assert not argv[1:]
+  if argv[1:]:
+    raise ValueError("leftover arguments: %r" % argv[1:])
 
   config = H(data_dir=FLAGS.data_dir,
              base_output_dir=FLAGS.base_output_dir,
              basename=FLAGS.basename,
              resume=FLAGS.resume,
              trace_fraction=FLAGS.trace_fraction)
-  config.hp = H(util.parse_hp(FLAGS.hp))
+
+  if FLAGS.hpfile:
+    with open(FLAGS.hpfile) as hpfile:
+      hpstring = hpfile.read()
+  else:
+    hpstring = FLAGS.hp
+  config.hp = H(util.parse_hp(hpstring))
   print str(config.hp)
   config.label = util.make_label(config)
   dirname = "%s_%s" % (datetime.datetime.now().isoformat(), config.label)
