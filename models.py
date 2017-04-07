@@ -1,4 +1,5 @@
 from __future__ import division
+import numbers
 import numpy as np, tensorflow as tf
 import util, tfutil, cells
 from holster import H
@@ -154,9 +155,15 @@ class StraightDilatedConvnet(Convnet):
 class Merger(util.Factory):
   def __init__(self, hp):
     self.hp = hp
+    if isinstance(self.hp.layers, numbers.Integral):
+        self.layers = [self.hp.layers]
+    elif isinstance(self.hp.layers, basestring):
+        self.layers = list(map(int, self.hp.layers.split(",")))
+    else:
+        raise ValueError()
 
   def should_merge(self, i):
-    return i in map(int, self.hp.layers.split(","))
+    return i in self.layers
 
   def __call__(self, i, x, caption):
     if not self.should_merge(i):
