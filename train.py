@@ -71,9 +71,11 @@ def main(argv=()):
 
       if global_step % config.hp.validate.interval == 0:
         values = evaluator(session, supervisor)
-        print "%5i loss:%10f loss asked:%10f loss given:%10f" % (
-          global_step, values.model.loss, values.model.loss_asked, values.model.loss_given)
         earlystopper.track(global_step, values.model.loss, session)
+        print "%5i loss:%10f loss asked:%10f loss given:%10f lr:%6g best:%10f age:%6i" % (
+          global_step, values.model.loss, values.model.loss_asked, values.model.loss_given,
+          # NOTE: earlystopper.best_loss is best of median filtered losses
+          trainer.graph.lr.eval(session), earlystopper.best_loss, earlystopper.age)
 
       if global_step >= config.hp.num_steps:
         print "hp.num_steps reached"
@@ -86,6 +88,7 @@ class EarlyStopper(object):
     self.best_loss = None
     self.reset_time = 0
     self.stale_time = 0
+    self.age = 0
     self.saver = tf.train.Saver(max_to_keep=1)
     # validation estimate is noisy, so filter it
     self.filter = util.MovingMedianFilter(10)
@@ -105,6 +108,7 @@ class EarlyStopper(object):
     elif step - self.reset_time > self.config.hp.lr.patience:
       session.run(self.decay_op)
       self.reset_time = step
+    self.age = step - self.stale_time
 
   def should_stop(self, step):
     return False # this is finicky and we don't really care
