@@ -1,60 +1,60 @@
-import os, subprocess
+import os, subprocess, datetime, numbers
 import numpy as np
+import util
+from holster import H
 
 trainsh_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "cluster_train.sh")
+assert os.path.exists(trainsh_path)
 
-class Distribution(object):
-  pass
-
-class Uniform(Distribution):
-  def __init__(self, a, b):
-    self.a = a
-    self.b = b
-
-  def __call__(self):
+def uniform(a, b):
+  if isinstance(a, numbers.Integral) and isinstance(b, numbers.Integral):
     return np.random.random_integers(a, b)
+  else:
+    return np.random.random() * (b - a) + a
 
-class Boolean(Distribution):
-  def __call__(self):
-    return np.random.rand() < 0.5
+def boolean():
+  return np.random.rand() < 0.5
 
-class Categorical(Distribution):
-  def __init__(self, categories):
-    self.categories = categories
+def categorical(xs):
+  return np.random.choice(xs)
 
-  def __call__(self):
-    return np.random.choice(self.categories)
+defaults = H(**util.parse_hp("""
+  lr.init=0.001
+  lr.decay=0.1
+  lr.patience=1000
+  validate.interval=100
+  num_steps=100000
+  masker.kind=orderless
+  image.size=64
+  image.depth=3
+  image.levels=256
+  caption.token=word
+  reader.kind=quasi
+"""))
+
+def sample_hp():
+  hp = H(defaults)
+  hp.batch_size = uniform(5, 30)
+  hp.optimize_given = boolean()
+  hp["reader.radius"] = uniform(4, 32)
+  hp["reader.size"] = uniform(32, 256)
+  hp["reader.bidir"] = boolean()
+  hp["reader.normalize"] = boolean()
+  hp["convnet.kind"] = categorical("straight straight_residual straight_dilated".split())
+  hp["convnet.depth"] = uniform(64, 512)
+  hp["convnet.profundity"] = uniform(4, 48)
+  hp["convnet.radius"] = uniform(2, 7)
+  hp["merger.kind"] = categorical("attention conv".split())
+  hp.merger.kind = "conv"
+  if hp.merger.kind == "conv":
+    hp.merger.depth = uniform(4, 64)
+  nmerges = uniform(1, min(5, hp.convnet.profundity))
+  layers = np.random.choice(hp.convnet.profundity, size=(nmerges,), replace=False)
+  hp["merger.layers"] = ",".join(map(str, sorted(layers)))
+  return hp
 
 def main():
-  distribution = H(**{
-    "batch_size": Uniform(5, 100),
-    "optimize_given": Boolean(),
-    "convnet.kind": Categorical("straight straight_residual straight_dilated".split()),
-    "convnet.depth": Uniform(64, 512),
-    "convnet.profundity": Uniform(4, 48),
-    "convnet.radius": Uniform(2, 7),
-    "merger.kind": Categorical("attention conv".split()),
-    "merger.delay": Uniform(0, 48),
-    "merger.rate": Uniform(1, 24),
-  })
-
-  defaults = H(**util.parse_hp("""
-    lr.init=0.001
-    lr.decay=0.1
-    lr.patience=1000
-    validate.interval=100
-    num_steps=100000
-    masker.kind=orderless
-    image.size=64
-    image.depth=3
-    image.levels=256
-    caption.token=word
-    reader.kind=quasi
-    reader.bidir=1
-    reader.radius=8
-    reader.size=200
-    reader.normalize=0
-  """))
+  timestamp = datetime.datetime.now().isoformat()
 
   def abbrev(key):
     return ".".join(parts[:1] for parts in key.split("."))
@@ -62,16 +62,15 @@ def main():
   # most will run out of memory and die early
   n = 50
   for i in range(n):
-    hp = H(defaults)
-    hp.Update((key, distribution())
-              for key, distribution in distributions.items())
-    basename = ",".join("=".join(abbrev(k), v) for k, v in hp.Items())
-    env = dict(os.environ)
-    env["MSCOCONET_HYPERPARAMETERS"] = util.serialize_hp(hp)
+    hp = sample_hp()
+    basename = ",".join("%s=%s" % (abbrev(k), v) for k, v in hp.Items())
+    hpfile_path = "%s_%s_hp.conf" % (timestamp, basename[:200])
+    with open(hpfile_path, "wb") as hpfile:
+      hpfile.write(util.serialize_hp(hp))
     subprocess.check_call(
-      ["jobdispatch", "--gpu", "--mem=16G", '--raw="#PBS -l feature=k80"',
-       trainsh_path, "--basename", basename],
-      env=env)
+      ["jobdispatch", "--gpu", "--mem=16G", "--raw=#PBS -l feature=k80",
+       "bash", trainsh_path, "--basename", basename, "--hpfile", hpfile_path])
 
 if __name__ == "__main__":
   main()
+
