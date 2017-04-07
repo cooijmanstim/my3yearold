@@ -176,8 +176,9 @@ class ConvMerger(Merger):
 
   def merge(self, x, caption):
     z = caption.summary
-    z = tfutil.toconv(z, height=x.shape[1], width=x.shape[2], depth=self.hp.depth)
-    return tf.stack([x, z], axis=3)
+    x_shape = x.get_shape().as_list()
+    z = tfutil.toconv(z, height=x_shape[1], width=x_shape[2], depth=self.hp.depth)
+    return tf.concat([x, z], axis=3)
 
 class AttentionMerger(Merger):
   key = "attention"
