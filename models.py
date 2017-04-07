@@ -124,7 +124,7 @@ class StraightDilatedConvnet(Convnet):
     # try to do the right thing
     h, w = x.get_shape().as_list()[1], x.get_shape().as_list()[2]
     assert h == w
-    ndilations = int(round(np.log2(h)))
+    ndilations = int(round(np.log2(h) - 1))
     dilation_interval = int(round(hp.profundity / ndilations))
 
     dilation = 1
