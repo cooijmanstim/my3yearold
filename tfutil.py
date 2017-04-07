@@ -107,6 +107,13 @@ def meanlogabs(x):
 
 softmax_xent = tf.nn.softmax_cross_entropy_with_logits # geez
 
+def softmax_emd(_sentinel=None, labels=None, logits=None, dim=-1, distance=tf.abs):
+  # earth mover's distance on discrete space, see https://arxiv.org/abs/1611.05916
+  px, exhat = labels, logits
+  pxhat = tf.nn.softmax(exhat, dim=dim)
+  emd = tf.reduce_sum(distance(tf.cumsum(px - pxhat, axis=dim)), axis=dim)
+  return emd
+
 def normalize(x, *args, **kwargs):
   if x.shape.ndims == 2:
     return layer_normalize(x, *args, **kwargs)

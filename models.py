@@ -1,5 +1,5 @@
 from __future__ import division
-import numbers
+import numbers, functools as ft
 import numpy as np, tensorflow as tf
 import util, tfutil, cells
 from holster import H
@@ -228,7 +228,12 @@ class Model(object):
     h.pxhat = tf.nn.softmax(h.exhat)
     h.xhat = tf.cast(tf.argmax(h.exhat, axis=4), tf.uint8)
 
-    h.losses = tfutil.softmax_xent(labels=h.px, logits=h.exhat)
+    lossfn = (dict(xent=tfutil.softmax_xent,
+                   emd=ft.partial(tfutil.softmax_emd, distance=tf.abs),
+                   emd2=ft.partial(tfutil.softmax_emd, distance=tf.square))
+              [hp.loss])
+
+    h.losses = lossfn(labels=h.px, logits=h.exhat)
 
     h.loss_total = tf.reduce_mean(h.losses)
     h.loss_given = tf.reduce_sum(h.losses *      h.mask  / tf.reduce_sum(    h.mask))
