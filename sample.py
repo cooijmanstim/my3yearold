@@ -9,7 +9,7 @@ from dynamite import D
 
 FLAGS = tf.flags.FLAGS
 tf.flags.DEFINE_string("checkpoint", None, "path to ckpt")
-tf.flags.DEFINE_string("strategy", "", "sampling strategy (e.g. independent_gibbs or uniform_ancestral)")
+tf.flags.DEFINE_string("strategy", "", "sampling strategy (e.g. independent_gibbs or orderless_ancestral)")
 tf.flags.DEFINE_string("basename", "", "base name for run")
 tf.flags.DEFINE_integer("num_samples", 20, "number of samples to generate")
 tf.flags.DEFINE_float("temperature", 1., "softmax temperature")
@@ -32,9 +32,10 @@ def main(argv=()):
   config.hp = H(util.parse_hp(hp_string))
   print str(config.hp)
 
-  dirname = "sample_%s_%s_T%s" % (config.basename,
-                                  datetime.datetime.now().isoformat(),
-                                  config.temperature)
+  dirname = "sample_%s_%s_%s_T%s" % (config.basename,
+                                     FLAGS.strategy,
+                                     datetime.datetime.now().isoformat(),
+                                     config.temperature)
   dirname = dirname[:255] # >:-(((((((((((((((((((((((((((((((((((((((((
   config.output_dir = dirname
 
@@ -113,7 +114,7 @@ def make_graph(data, model, config, fold="valid"):
                   caption_length=h.inputs.caption_length)
   return h
 
-def uniform_selector(mask, pxhat):
+def orderless_selector(mask, pxhat):
   # sample uniformly among masked-out variables
   return util.sample((1 - mask).reshape([mask.shape[0], -1]),
                      axis=1, onehot=True).reshape(mask.shape)
@@ -208,12 +209,12 @@ class Strategy(util.Factory):
   def __call__(self, x, mask):
     return self.sampler(x, mask)
 
-class UniformAncestralStrategy(Strategy):
-  key = "uniform_ancestral"
+class OrderlessAncestralStrategy(Strategy):
+  key = "orderless_ancestral"
 
   def __init__(self, config):
     self.sampler = AncestralSampler(predictor=config.predictor,
-                                    selector=uniform_selector,
+                                    selector=orderless_selector,
                                     temperature=config.temperature)
 
 class GreedyAncestralStrategy(Strategy):
