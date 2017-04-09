@@ -1,4 +1,4 @@
-import os, sys, datetime, shutil
+import os, sys, datetime, zipfile
 import itertools as it
 import numpy as np, tensorflow as tf
 import util, tfutil, datasets, models, maskers
@@ -267,8 +267,27 @@ def prepare_run_directory(config):
   if not config.resume:
     with open(os.path.join(config.output_dir, "hp.conf"), "w") as f:
       f.write(util.serialize_hp(config.hp, outer_separator="\n"))
-    shutil.copytree(os.path.dirname(os.path.realpath(__file__)),
-                    os.path.join(config.output_dir, "code"))
+    ziptree(os.path.join(config.output_dir, "code.zip"),
+            os.path.dirname(os.path.realpath(__file__)))
+
+def ziptree(zippath, treepath, skip_hidden=False):
+  with zipfile.ZipFile(zippath, "w") as zf:
+    def reladd(path):
+      # strip the path to the directory containing the tree
+      zf.write(path, os.path.relpath(path, os.path.dirname(treepath)))
+
+    for dirname, subdirnames, filenames in os.walk(treepath):
+      reladd(dirname)
+      for filename in filenames:
+        if skip_hidden and filename.startswith("."):
+          continue
+        reladd(os.path.join(dirname, filename))
+
+      if skip_hidden:
+        # remove in reverse to avoid having to update indices
+        for i in reversed(sorted([i for i, subdirname in enumerate(subdirnames)
+                                  if subdirname.startswith(".")])):
+          del subdirnames[i]
 
 if __name__ == "__main__":
   tf.app.run()
