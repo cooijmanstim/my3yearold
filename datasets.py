@@ -88,6 +88,7 @@ class MscocoTF(Mscoco):
 class MscocoNP(Mscoco):
   def __init__(self, config):
     self.config = config
+    self.numpy_dir = os.path.join(self.config.data_dir, "numpy")
     self.ensure_local_copy()
     self.load()
 
@@ -96,17 +97,18 @@ class MscocoNP(Mscoco):
     return len(self.tokenizer.tokenmap)
 
   def ensure_local_copy(self):
-    if not tf.gfile.Exists(self.config.data_dir):
-      print "copying data to", self.config.data_dir
-      tf.gfile.MakeDirs(self.config.data_dir)
-      tarfile.open(os.environ["MSCOCO_INPAINTING_TARBALL"], 'r:bz2').extractall(self.config.data_dir)
+    if not tf.gfile.Exists(self.numpy_dir):
+      print "copying data to", self.numpy_dir
+      tf.gfile.MakeDirs(self.numpy_dir)
+      # FIXME ow we have a double toplevel dir
+      tarfile.open(os.environ["MSCOCO_INPAINTING_TARBALL"], 'r:bz2').extractall(self.numpy_dir)
       print "done"
 
   def get_caption_string(self, identifier):
     return "|".join(self.captions[identifier])
 
   def get_tokenizer(self, token):
-    cache_path = os.path.join(self.config.data_dir,
+    cache_path = os.path.join(self.numpy_dir,
                               "tokenizer_%s.pkl" % self.config.hp.caption.token)
     try:
       with open(cache_path, "rb") as cache:
@@ -125,7 +127,7 @@ class MscocoNP(Mscoco):
   def load(self):
     self.folds = dict(train=self.get_filenames("train"),
                       valid=self.get_filenames("valid"))
-    self.captions = pkl.load(open(os.path.join(self.config.data_dir, "inpainting",
+    self.captions = pkl.load(open(os.path.join(self.numpy_dir, "inpainting",
                                                "dict_key_imgID_value_caps_train_and_valid.pkl")))
     self.tokenizer = self.get_tokenizer(self.config.hp.caption.token)
 
@@ -140,7 +142,7 @@ class MscocoNP(Mscoco):
   @util.memo
   def get_filenames(self, fold):
     fold = dict(train="train", valid="val")[fold] # -_-
-    return tf.gfile.Glob(os.path.join(self.config.data_dir, "inpainting", "%s2014" % fold, "*.jpg"))
+    return tf.gfile.Glob(os.path.join(self.numpy_dir, "inpainting", "%s2014" % fold, "*.jpg"))
 
   def get_batches(self, filenames, batch_size, shuffle=False):
     return iter(map(self.load_batch, util.batches(filenames, batch_size=batch_size, shuffle=shuffle)))

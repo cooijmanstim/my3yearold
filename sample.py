@@ -9,7 +9,7 @@ from dynamite import D
 
 FLAGS = tf.flags.FLAGS
 tf.flags.DEFINE_string("checkpoint", None, "path to ckpt")
-tf.flags.DEFINE_string("strategy", "", "sampling strategy (e.g. UniformAncestralSampler)")
+tf.flags.DEFINE_string("strategy", "", "sampling strategy (e.g. independent_gibbs or uniform_ancestral)")
 tf.flags.DEFINE_string("basename", "", "base name for run")
 tf.flags.DEFINE_integer("num_samples", 20, "number of samples to generate")
 tf.flags.DEFINE_float("temperature", 1., "softmax temperature")
@@ -31,9 +31,10 @@ def main(argv=()):
              temperature=FLAGS.temperature)
   config.hp = H(util.parse_hp(hp_string))
   print str(config.hp)
-  config.label = util.make_label(config)
 
-  dirname = "sample_%s_T%s" % (datetime.datetime.now().isoformat(), config.temperature)
+  dirname = "sample_%s_%s_T%s" % (config.basename,
+                                  datetime.datetime.now().isoformat(),
+                                  config.temperature)
   dirname = dirname[:255] # >:-(((((((((((((((((((((((((((((((((((((((((
   config.output_dir = dirname
 
@@ -48,7 +49,8 @@ def main(argv=()):
   config.hp.masker.image_size = config.hp.image.size # -_-
   config.masker = maskers.make(config.hp.masker.kind, hp=config.hp.masker)
 
-  graph = make_graph(data, model, config)
+  with D.Bind(train=False):
+    graph = make_graph(data, model, config)
 
   saver = tf.train.Saver()
   session = tf.Session()
