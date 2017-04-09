@@ -97,6 +97,9 @@ def to_onehot(i, depth, axis=None):
   assert np.allclose(x.sum(axis=axis), 1)
   return x
 
+def onehot_argmax(x, axis=None):
+  return to_onehot(np.argmax(x, axis=axis), depth=x.shape[axis], axis=axis)
+
 def parse_hp(s):
   d = dict()
   for a in s.split():

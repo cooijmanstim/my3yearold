@@ -119,16 +119,17 @@ def orderless_selector(mask, pxhat):
   return util.sample((1 - mask).reshape([mask.shape[0], -1]),
                      axis=1, onehot=True).reshape(mask.shape)
 
-def greedy_selector(mask, pxhat, sign=+1):
+def greedy_selector(mask, pxhat, sign=-1):
   # choose variable with lowest entropy
-  entropies = -(pxhat * np.log(pxhat)).sum(axis=4)
-  return np.reshape(util.to_onehot(np.argmin(sign * entropies.reshape([mask.shape[0], -1]),
-                                             axis=1),
-                                   axis=1),
-                    mask.shape)
+  entropies = -(pxhat * np.log(np.where(pxhat > 0, pxhat, 1))).sum(axis=4)
+  # ensure already known variables are never chosen
+  scores = entropies - sign * np.where(mask, np.inf, 0)
+  flat_scores = scores.reshape([scores.shape[0], -1])
+  flat_selection = util.onehot_argmax(sign * flat_scores, axis=1)
+  return np.reshape(flat_selection, mask.shape)
 
 def antigreedy_selector(mask, pxhat):
-  return greedy_selector(mask, pxhat, sign=-1)
+  return greedy_selector(mask, pxhat, sign=+1)
 
 class BaseSampler(object):
   pass
