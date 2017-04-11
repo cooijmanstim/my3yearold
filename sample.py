@@ -85,12 +85,15 @@ def main(argv=()):
 
   xhats, masks = sampler(xs, masks)
 
+  with bamboo.scope("final"):
+    bamboo.log(x=xhats, mask=masks)
+
   for i, (caption, x, xhat) in enumerate(util.equizip(
       original.caption, xs, xhats)):
     scipy.misc.imsave(os.path.join(config.output_dir, "%i_original.png" % i), x)
     scipy.misc.imsave(os.path.join(config.output_dir, "%i_sample.png" % i), xhat)
     with open(os.path.join(config.output_dir, "%i_caption.txt" % i), "w") as file:
-      file.write(caption)
+      file.write(data.tokenizer.decode(caption))
 
   bamboo.dump(os.path.join(config.output_dir, "log.npz"))
 

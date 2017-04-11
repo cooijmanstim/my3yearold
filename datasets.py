@@ -179,6 +179,10 @@ class Tokenizer(util.Factory):
     codes = [self.tokenmap[t] for t in tokens]
     return codes
 
+  def decode(self, codes):
+    tokens = [self.inverse_tokenmap[c] for c in codes]
+    return self.join(tokens)
+
   @property
   def checksum(self):
     return hashlib.md5("".join(self.tokenmap.keys())).hexdigest()
@@ -191,23 +195,35 @@ class WordTokenizer(Tokenizer):
     tokens = list(reversed(sorted(counts.keys(), key=counts.__getitem__)))
     rare_tokens = set(it.takewhile(lambda token: counts[token] < 5, tokens))
     common_tokens = set(tokens) - rare_tokens
+
     tokenmap = ordict((token, code) for code, token in enumerate(common_tokens))
+    inverse_tokenmap = ordict((code, token) for code, token in enumerate(common_tokens))
+
     # map rare tokens to a common <UNK> code
     tokenmap.update((token, len(common_tokens)) for token in rare_tokens)
+    inverse_tokenmap[len(common_tokens)] = "<UNK>"
+
     self.tokenmap = tokenmap
+    self.inverse_tokenmap = inverse_tokenmap
 
   def tokenize(self, s):
     return nltk.word_tokenize(
       re.sub(r"[^\w\s.]+", r" ",
              re.sub(r"([.!?|])+", r" \1 ", s)))
 
+  def join(self, tokens):
+    return " ".join(tokens)
+
 class CharacterTokenizer(Tokenizer):
   key = "character"
 
   def prepare(self, strings):
     tokens = set(self.tokenize("".join(strings)))
-    tokenmap = ordict((token, code) for code, token in enumerate(tokens))
-    self.tokenmap = tokenmap
+    self.tokenmap = ordict((token, code) for code, token in enumerate(tokens))
+    self.inverse_tokenmap = ordict((code, token) for code, token in enumerate(common_tokens))
 
   def tokenize(self, s):
     return list(s)
+
+  def join(self, tokens):
+    return "".join(tokens)
