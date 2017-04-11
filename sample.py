@@ -186,6 +186,15 @@ class IndependentSampler(BaseSampler):
     mask = np.ones_like(mask)
     return x, mask
 
+class UniformSampler(BaseSampler):
+  @bamboo_scope("uniform")
+  def __call__(self, x, mask):
+    xhat = np.random.randint(256, size=x.shape)
+    x = np.where(mask, x, xhat)
+    bamboo.log(x=x, mask=mask)
+    mask = np.ones_like(mask)
+    return x, mask
+
 class GibbsSampler(BaseSampler):
   def __init__(self, sampler, schedule, num_steps=None):
     self.sampler = sampler
@@ -198,6 +207,8 @@ class GibbsSampler(BaseSampler):
     assert count.size == 1 # FIXME not if gibbs within gibbs
   
     num_steps = count if self.num_steps is None else self.num_steps
+
+    x, _ = UniformSampler()(x, mask)
   
     with bamboo.scope("sequence", subsample_factor=100):
       with progressbar.ProgressBar(maxval=num_steps) as bar:
@@ -246,7 +257,7 @@ class IndependentGibbsStrategy(Strategy):
                                 schedule=yao_schedule,
                                 num_steps=None)
 
-def yao_schedule(i, n, pmax=0.9, pmin=0.1, alpha=0.7):
+def yao_schedule(i, n, pmax=0.9, pmin=0.1, alpha=0.4):
   wat = (pmax - pmin) * i / n
   return max(pmin, pmax - wat / alpha)
 
