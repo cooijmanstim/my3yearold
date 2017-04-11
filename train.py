@@ -44,10 +44,11 @@ def main(argv=()):
 
   model = models.Model(config.hp)
 
-  config.hp.masker.image_size = config.hp.image.size # -_-
+  config.hp.masker.image = config.hp.image # -_-
   config.masker = maskers.make(config.hp.masker.kind, hp=config.hp.masker)
 
   config.global_step = tf.Variable(0, name="global_step", trainable=False)
+
   trainer = Trainer(data, model, config)
   tf.get_variable_scope().reuse_variables()
   evaluator = Evaluator(data, model, config)

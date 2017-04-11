@@ -214,7 +214,9 @@ class Model(object):
     h.px = tf.one_hot(h.x, hp.image.levels)
     h.mask = mask
 
-    h.context = tf.concat([tfutil.collapse(h.px * mask[:, :, :, :, None],
+    assert tfutil.get_depth(h.mask) == hp.masker.image.depth
+
+    h.context = tf.concat([tfutil.collapse(h.px * h.mask[:, :, :, :, None],
                                            [0, 1, 2, [3, 4]]),
                            h.mask], axis=3)
 

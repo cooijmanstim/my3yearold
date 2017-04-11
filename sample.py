@@ -47,7 +47,12 @@ def main(argv=()):
 
   model = models.Model(config.hp)
 
-  config.hp.masker.image_size = config.hp.image.size # -_-
+  config.hp.masker.image = H(config.hp.image) # -_-
+  if True:
+    # I have a model trained with a buggy ContiguousMasker that returns masks with depth 1. That
+    # mask depth affects the number of the channels going into the model and hence the parameter
+    # shapes. The model won't restore if the mask has depth != 1. FML
+    config.hp.masker.image.depth = 1
   config.masker = maskers.make(config.hp.masker.kind, hp=config.hp.masker)
 
   with D.Bind(train=False):
@@ -78,7 +83,9 @@ def main(argv=()):
     masks = np.ones(xs.shape).astype(np.float32)
     bamboo.log(x=xs, mask=masks)
 
-  masks = maskers.ContiguousMasker(H(image_size=64, size=32)).get_value(config.num_samples)
+  masks = (maskers
+           .ContiguousMasker(H(image=config.hp.masker.image, size=32))
+           .get_value(config.num_samples))
   xs = masks * xs
   with bamboo.scope("masked"):
     bamboo.log(x=xs, mask=masks)
@@ -112,7 +119,7 @@ def make_graph(data, model, config, fold="valid"):
   h.inputs = data.get_variables()
   h.mask = tf.placeholder(tf.float32, [None, config.hp.image.size,
                                        config.hp.image.size,
-                                       config.hp.image.depth], name="mask")
+                                       config.hp.masker.image.depth], name="mask")
   h.model = model(image=h.inputs.image, mask=h.mask, caption=h.inputs.caption,
                   caption_length=h.inputs.caption_length)
   return h

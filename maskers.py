@@ -13,9 +13,9 @@ class CenterMasker(BaseMasker):
     self.hp = hp
 
   def get_variable(self, batch_size):
-    l = (self.hp.image_size - self.hp.size) // 2
+    l = (self.hp.image.size - self.hp.size) // 2
     b = l + self.hp.size
-    mask = np.ones((1, self.hp.image_size, self.hp.image_size, 1), dtype=float)
+    mask = np.ones((1, self.hp.image.size, self.hp.image.size, self.hp.image.depth), dtype=float)
     mask[:, l:b, l:b] = 0
     return tf.constant(mask)
 
@@ -29,8 +29,8 @@ class ContiguousMasker(BaseMasker):
     self.hp = hp
 
   def get_value(self, batch_size):
-    mask = np.ones([batch_size, self.hp.image_size, self.hp.image_size, 3], dtype=np.float32)
-    topleft = np.random.randint(self.hp.image_size - self.hp.size, size=[batch_size, 2])
+    mask = np.ones([batch_size, self.hp.image.size, self.hp.image.size, self.hp.image.depth], dtype=np.float32)
+    topleft = np.random.randint(self.hp.image.size - self.hp.size, size=[batch_size, 2])
     vertical = topleft[:, 0, None] + np.arange(self.hp.size)[None, :]
     horizontal = topleft[:, 1, None] + np.arange(self.hp.size)[None, :]
     mask[np.arange(batch_size)[:, None, None], vertical[:, :, None], horizontal[:, None, :], :] = 0.
@@ -38,14 +38,15 @@ class ContiguousMasker(BaseMasker):
     return mask
 
   def get_variable(self, batch_size):
-    r = tf.range(self.hp.image_size)
-    ls = tf.random_uniform([batch_size, 2], maxval=self.hp.image_size - self.hp.size, dtype=tf.int32)
+    r = tf.range(self.hp.image.size)
+    ls = tf.random_uniform([batch_size, 2], maxval=self.hp.image.size - self.hp.size, dtype=tf.int32)
     us = ls + self.hp.size
     r = r[None, :]
     ls, us = ls[:, :, None], us[:, :, None]
     vertmask = ~((ls[:, 0] <= r) & (r < us[:, 0]))
     horzmask = ~((ls[:, 1] <= r) & (r < us[:, 1]))
-    return tf.to_float(vertmask[:, :, None, None] | horzmask[:, None, :, None])
+    areamask = tf.to_float(vertmask[:, :, None, None] | horzmask[:, None, :, None])
+    return tf.tile(areamask, [1, 1, 1, self.hp.image.depth])
 
   def get_feed_dict(self, batch_size):
     return {}
@@ -57,7 +58,7 @@ class OrderlessMasker(BaseMasker):
     self.hp = hp
 
   def get_variable(self, batch_size):
-    B, H, W, D = batch_size, self.hp.image_size, self.hp.image_size, 3
+    B, H, W, D = batch_size, self.hp.image.size, self.hp.image.size, self.hp.image.depth
     mask_size = tf.random_uniform([B], maxval=H * W * D, dtype=tf.int64)
     # generate a binary mask with `mask_size` ones, then shuffle the ones into random places. Note
     # batch axis comes second because `tf.random_shuffle` only works along the first axis -_-
@@ -78,7 +79,7 @@ class FunctionMasker(BaseMasker):
 
   @util.memo
   def get_variable(self, batch_size):
-    return tf.placeholder(tf.float32, [None, self.hp.image_size, self.hp.image_size, None], name="mask")
+    return tf.placeholder(tf.float32, [None, self.hp.image.size, self.hp.image.size, self.hp.image.depth], name="mask")
 
   def get_feed_dict(self, batch_size):
     return {self.get_variable(): self.fn(batch_size, hp=self.hp)}
