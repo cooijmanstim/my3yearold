@@ -1,3 +1,4 @@
+import itertools as it
 import numpy as np, tensorflow as tf
 import util
 
@@ -47,6 +48,53 @@ class ContiguousMasker(BaseMasker):
     horzmask = ~((ls[:, 1] <= r) & (r < us[:, 1]))
     areamask = tf.to_float(vertmask[:, :, None, None] | horzmask[:, None, :, None])
     return tf.tile(areamask, [1, 1, 1, self.hp.image.depth])
+
+  def get_feed_dict(self, batch_size):
+    return {}
+
+# bernoulli but with rectangular neighborhood around each cell
+class ContiguishMasker(BaseMasker):
+  key = "contiguish"
+
+  def __init__(self, hp):
+    self.hp = hp
+
+  @property
+  def didjs(self):
+    return list(it.product(range(-self.hp.radius, self.hp.radius + 1), repeat=2))
+
+  def get_value(self, batch_size):
+    didjs = self.didjs
+    # We want to mimic OrderlessMasker which has uniform mask size, but we can't control the mask
+    # size easily and must instead use independent Bernoullis to get a mask wich we then shift
+    # around and conjoin. With independent Bernoullis the mask size follows a binomial distribution,
+    # but by putting a uniform (0, 1) prior on the Bernoulli probability we miraculously end up with
+    # a uniform mask size.
+    p = np.random.random()
+    # Adjust for the fact that we're conjoining len(didjs) Bernoulli variables.
+    p **= (1. / len(didjs))
+    mask = np.random.random((batch_size, self.hp.image.size, self.hp.image.size, self.hp.image.depth)) < p
+    return np.prod([np.roll(mask, (di, dj), (0, 1)) for di, dj in didjs], axis=0)
+
+  def get_variable(self, batch_size):
+    didjs = self.didjs
+    p = np.random.random()
+    p **= (1. / len(didjs))
+    mask = (tf.random_uniform([batch_size,
+                               self.hp.image.size + 2 * self.hp.radius,
+                               self.hp.image.size + 2 * self.hp.radius,
+                               self.hp.image.depth])
+            < p)
+    mask = tf.to_float(mask)
+    # product over shifts in all directions
+    mask = tf.reduce_prod([
+      mask[:,
+           self.hp.radius + di:self.hp.radius + di + self.hp.image.size,
+           self.hp.radius + dj:self.hp.radius + dj + self.hp.image.size,
+           :]
+      for di, dj in didjs],
+      axis=0)
+    return mask
 
   def get_feed_dict(self, batch_size):
     return {}
