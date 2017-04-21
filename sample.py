@@ -48,11 +48,6 @@ def main(argv=()):
   model = models.Model(config.hp)
 
   config.hp.masker.image = H(config.hp.image) # -_-
-  if True:
-    # I have a model trained with a buggy ContiguousMasker that returns masks with depth 1. That
-    # mask depth affects the number of the channels going into the model and hence the parameter
-    # shapes. The model won't restore if the mask has depth != 1. FML
-    config.hp.masker.image.depth = 1
   config.masker = maskers.make(config.hp.masker.kind, hp=config.hp.masker)
 
   with D.Bind(train=False):
