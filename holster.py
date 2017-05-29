@@ -157,6 +157,9 @@ class BaseHolster(object):
   def __bool__(self):
     return any(self.Keys())
 
+  def __len__(self):
+    return len(self.Keys())
+
   __nonzero__ = __bool__
 
   def Keys(self):
@@ -263,6 +266,9 @@ class Holster(BaseHolster):
           # recursive, but in the inner call subtree will be a leaf
           self.Delete(subkey)
       del self.Data[key]
+
+  def __len__(self):
+    return len(self.Data)
 
   def __repr__(self):
     return "Holster([%s])" % ", ".join("(%r, %r)" % (key, value)
